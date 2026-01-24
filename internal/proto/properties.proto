@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package pathway;
+
+option go_package = "github.com/npclaudiu/pathway/internal/proto";
+
+import "google/protobuf/struct.proto";
+
+message Properties {
+  map<string, google.protobuf.Value> data = 1;
+}
