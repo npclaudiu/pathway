@@ -1,7 +1,13 @@
-.PHONY: test generate install-protoc-gen-go examples
+.PHONY: test test-unit test-integration generate install-protoc-gen-go fmt vet tidy check
 
-test:
-	go test ./... -v
+test: test-unit test-integration
+
+test-unit:
+	go test -v -coverprofile=coverage.out . ./internal/...
+	go tool cover -func=coverage.out
+
+test-integration:
+	go test -v ./tests/...
 
 install-protoc-gen-go:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
@@ -9,6 +15,13 @@ install-protoc-gen-go:
 generate: install-protoc-gen-go
 	PATH=$(shell go env GOPATH)/bin:$(PATH) protoc --go_out=. --go_opt=paths=source_relative internal/proto/*.proto
 
-examples:
-	mkdir -p bin/examples
-	go build -o bin/examples/ ./examples/...
+fmt:
+	go fmt ./...
+
+vet:
+	go vet ./...
+
+tidy:
+	go mod tidy
+
+check: fmt vet tidy
