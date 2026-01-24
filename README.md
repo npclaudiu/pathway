@@ -9,18 +9,6 @@ It provides a fluid, Gremlin-like query interface for natural graph traversals.
 
 Vibe coded using [Google Antigravity](https://antigravity.google/).
 
-## Key Features
-
-* **Embedded & ACID**: Built on Pebble (LSM-Tree) with full Snapshot Isolation
-  transaction support.
-* **Fluid Query Interface**: Expressive, chainable traversals (e.g.,
-  `V().Out().HasLabel()`).
-* **Dual-Edge Indexing**: Edges are stored bidirectionally, enabling **O(1)**
-  lookups for both outgoing (`Alice -> ?`) and incoming (`? -> Alice`)
-  traversals.
-* **Schema-less**: Supports dynamic properties on both Nodes and Edges (Polyglot
-  Persistence).
-
 ## Installation
 
 ```bash
@@ -90,12 +78,6 @@ func main() {
 * **Constraints**:
   * **Labels**: Recommended max 255 bytes.
   * **IDs**: UUIDs only.
-
-### Performance Characteristics
-
-* **Node Lookup**: **O(1)** (Direct Key Access).
-* **Edge Traversal**: **O(E)** (Linear to the number of edges on the node).
-* **Writes**: Atomic batch commits.
 
 ## Concurrency & Thread Safety
 
