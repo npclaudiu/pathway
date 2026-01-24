@@ -1,3 +1,16 @@
+LOCAL_BIN := $(shell pwd)/bin
+PROTOC_GEN_GO := $(LOCAL_BIN)/protoc-gen-go
+GOLANGCI_LINT := $(LOCAL_BIN)/golangci-lint
+
+$(LOCAL_BIN):
+	mkdir -p $(LOCAL_BIN)
+
+$(PROTOC_GEN_GO): tools/go.mod tools/go.sum tools/tools.go | $(LOCAL_BIN)
+	cd tools && go build -o $(PROTOC_GEN_GO) google.golang.org/protobuf/cmd/protoc-gen-go
+
+$(GOLANGCI_LINT): tools/go.mod tools/go.sum tools/tools.go | $(LOCAL_BIN)
+	cd tools && go build -o $(GOLANGCI_LINT) github.com/golangci/golangci-lint/cmd/golangci-lint
+
 .PHONY: test
 test: test-unit test-integration
 
@@ -10,13 +23,9 @@ test-unit:
 test-integration:
 	go test -v ./tests/...
 
-.PHONY: install-protoc-gen-go
-install-protoc-gen-go:
-	cd tools && go install google.golang.org/protobuf/cmd/protoc-gen-go
-
 .PHONY: generate
-generate: install-protoc-gen-go
-	PATH=$(shell go env GOPATH)/bin:$(PATH) protoc --go_out=. --go_opt=paths=source_relative internal/proto/*.proto
+generate: $(PROTOC_GEN_GO)
+	PATH=$(LOCAL_BIN):$(PATH) protoc --go_out=. --go_opt=paths=source_relative internal/proto/*.proto
 
 .PHONY: fmt
 fmt:
@@ -33,14 +42,11 @@ tidy:
 .PHONY: check
 check: fmt vet tidy lint
 
-.PHONY: install-lint
-install-lint:
-	cd tools && go install github.com/golangci/golangci-lint/cmd/golangci-lint
-
 .PHONY: lint
-lint: install-lint
-	$(shell go env GOPATH)/bin/golangci-lint run
+lint: $(GOLANGCI_LINT)
+	$(GOLANGCI_LINT) run
 
 .PHONY: clean
 clean:
 	rm -rf coverage.out
+	rm -rf $(LOCAL_BIN)
