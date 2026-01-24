@@ -6,6 +6,10 @@ import "strings"
 type Predicate func(val interface{}) bool
 
 // Eq returns a predicate that checks for strict equality.
+//
+// Usage:
+//
+//	pathway.Eq("Person")
 func Eq(expected interface{}) Predicate {
 	return func(val interface{}) bool {
 		return val == expected
@@ -14,6 +18,10 @@ func Eq(expected interface{}) Predicate {
 
 // Gt returns a predicate that checks if value > expected.
 // Only supports int/float64 for now directly.
+//
+// Usage:
+//
+//	pathway.Gt(18)
 func Gt(expected interface{}) Predicate {
 	return func(val interface{}) bool {
 		switch v := val.(type) {
@@ -31,6 +39,10 @@ func Gt(expected interface{}) Predicate {
 }
 
 // Lt returns a predicate that checks if value < expected.
+//
+// Usage:
+//
+//	pathway.Lt(100.0)
 func Lt(expected interface{}) Predicate {
 	return func(val interface{}) bool {
 		switch v := val.(type) {
@@ -48,6 +60,10 @@ func Lt(expected interface{}) Predicate {
 }
 
 // Prefix returns a predicate that checks if a string starts with prefix.
+//
+// Usage:
+//
+//	pathway.Prefix("User-")
 func Prefix(prefix string) Predicate {
 	return func(val interface{}) bool {
 		if s, ok := val.(string); ok {

@@ -9,6 +9,7 @@ import (
 
 // Iterator is the generic interface for iterating over key-value pairs.
 // It abstracts the underlying storage iterator.
+// Users typically interact with specific interfaces like NodeIterator or EdgeIterator.
 type Iterator interface {
 	// Next advances the iterator to the next element. Returns false if exhausted/error.
 	Next() bool
@@ -39,6 +40,7 @@ type EdgeIterator interface {
 // NodeIterator iterates over nodes returning typed data.
 type NodeIterator interface {
 	Iterator // Embed generic iterator
+	// Node returns the ID and Label of the current node.
 	Node() (uuid.UUID, string, error)
 }
 

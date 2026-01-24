@@ -78,14 +78,20 @@ func main() {
 * **Constraints**:
   * **Labels**: Recommended max 255 bytes.
   * **IDs**: UUIDs only.
-  * **Properties**: Supports standard JSON types. Encoded with type prefix for type safety.
+  * **Properties**: Supports standard JSON types. Encoded with type prefix for
+    type safety.
 
 ## Performance
 
-The following benchmarks measure the performance of key graph operations using the standard Go testing framework. Each scenario is executed in two storage modes:
+The following benchmarks measure the performance of key graph operations using
+the standard Go testing framework. Each scenario is executed in two storage
+modes:
 
-1. **In-Memory Storage (`:memory:`)**: Measures the overhead of the Pathway library logic, graph traversal engine, and encoding layer without disk I/O.
-2. **Disk Storage**: Measures real-world performance using a temporary directory on the local filesystem. This includes the cost of ACID transactions and `fsync` operations provided by the underlying Pebble storage engine.
+1. **In-Memory Storage (`:memory:`)**: Measures the overhead of the Pathway
+   library logic, graph traversal engine, and encoding layer without disk I/O.
+2. **Disk Storage**: Measures real-world performance using a temporary directory
+   on the local filesystem. This includes the cost of ACID transactions and
+   `fsync` operations provided by the underlying Pebble storage engine.
 
 ### Interpretation
 
@@ -93,7 +99,9 @@ The following benchmarks measure the performance of key graph operations using t
 * **Bytes/Op**: Average memory allocated per operation.
 * **Allocs/Op**: Average number of heap allocations per operation.
 
-> **Disclaimer**: The results below are a sample run on specific hardware. Actual performance will vary depending on your machine, operating system, filesystem configuration, and data characteristics.
+> **Disclaimer**: The results below are a sample run on specific hardware.
+> Actual performance will vary depending on your machine, operating system,
+> filesystem configuration, and data characteristics.
 
 Benchmarks were run on an **Apple M2 Pro** (darwin/arm64).
 
@@ -121,7 +129,9 @@ Benchmarks were run on an **Apple M2 Pro** (darwin/arm64).
 | **TraverseOut** (1-hop) | 101,926 | 11,111 | 3,593 | 70 |
 | **BFS_2Hop** | 63,694 | 17,768 | 6,666 | 133 |
 
-> **Note**: Disk write performance reflects full ACID compliance with `fsync` enabled for every transaction. Batch operations significantly amortize this cost.
+> **Note**: Disk write performance reflects full ACID compliance with `fsync`
+> enabled for every transaction. Batch operations significantly amortize this
+> cost.
 
 ### Visual Comparison
 
@@ -148,5 +158,8 @@ Pathway supports a rich set of traversal steps inspired by Gremlin:
 
 ## Documentation
 
-For a comprehensive guide on data modeling and complex graph queries, see the
-[Social Network Tutorial](docs/tutorial.md).
+For detailed API documentation, including all types and methods, please refer to
+the [API Reference](docs/api.md).
+
+For a practical guide on data modeling and graph queries, please see the [Social
+Network Tutorial](docs/tutorial.md).

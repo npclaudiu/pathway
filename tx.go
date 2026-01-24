@@ -11,6 +11,7 @@ import (
 )
 
 // Tx represents a database transaction.
+// It can be either read-only (created via View) or read-write (created via Update).
 type Tx struct {
 	db       *Database
 	ctx      context.Context
@@ -37,7 +38,9 @@ func (p *pebbleIterator) Path() []interface{} {
 	return nil // Base iterator has no path history
 }
 
-// NewIterator creates a new iterator for the transaction.
+// NewIterator creates a new low-level iterator for the transaction.
+// This is primarily for internal use; users should typically use high-level iterators
+// like ScanNodes, OutEdges, etc.
 func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error) {
 	var iter *pebble.Iterator
 	var err error
@@ -53,7 +56,8 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error) {
 	return &pebbleIterator{iter}, nil
 }
 
-// Get retrieves the value for a given key.
+// Get retrieves the raw value for a given key.
+// It handles the difference between read-only readers and write batches.
 func (tx *Tx) Get(key []byte) ([]byte, error) {
 	if tx.readOnly {
 		val, closer, err := tx.reader.Get(key)
@@ -82,7 +86,8 @@ func (tx *Tx) Get(key []byte) ([]byte, error) {
 	return result, nil
 }
 
-// Set sets the value for a given key.
+// Set sets the raw value for a given key.
+// Returns an error if the transaction is read-only.
 func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
@@ -90,7 +95,8 @@ func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error {
 	return tx.batch.Set(key, value, opts)
 }
 
-// Delete deletes the value for a given key.
+// Delete deletes the raw value for a given key.
+// Returns an error if the transaction is read-only.
 func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
@@ -105,8 +111,9 @@ func (tx *Tx) Access(fn func(tx *Tx) error) error {
 }
 
 // Close closes the transaction.
-// this releases the underlying snapshot. For other transactions, it's a no-op
-// as the batch/snapshot is managed by Update/View.
+// This releases the underlying snapshot. For write transactions (Update), it's a no-op
+// as the batch is managed by the DB.Update method, but for read-only (View/NewReadTx),
+// it releases the read lease.
 func (tx *Tx) Close() error {
 	if tx.readOnly && tx.reader != nil {
 		return tx.reader.Close()
@@ -115,6 +122,11 @@ func (tx *Tx) Close() error {
 }
 
 // PutNode creates or updates a node with the given label.
+//
+// Usage:
+//
+//	id := uuid.New()
+//	err := tx.PutNode(id, "Person")
 func (tx *Tx) PutNode(id uuid.UUID, label string) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
@@ -146,7 +158,14 @@ func (tx *Tx) PutNode(id uuid.UUID, label string) error {
 }
 
 // PutEdge creates a directed edge between two nodes.
-// It performs a dual-write (outgoing key and incoming key).
+// It performs a dual-write, creating both an outgoing key (for traversals from source)
+// and an incoming key (for traversals to target).
+//
+// Returns an error if either source or destination node does not exist.
+//
+// Usage:
+//
+//	edgeID, err := tx.PutEdge(srcID, dstID, "KNOWS")
 func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 	if tx.readOnly {
 		return uuid.Nil, pebble.ErrReadOnly
@@ -201,6 +220,14 @@ func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 }
 
 // SetProperties sets a map of properties for a given node or edge.
+// This completely replaces any existing properties for that entity.
+//
+// Usage:
+//
+//	err := tx.SetProperties(id, map[string]interface{}{
+//	    "name": "Alice",
+//	    "age":  30,
+//	})
 func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
@@ -215,7 +242,10 @@ func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 	return tx.batch.Set(key, data, nil)
 }
 
-// DeleteNode deletes a node and all its incident edges.
+// DeleteNode deletes a node and all its incident edges (both outgoing and incoming).
+// This ensures graph consistency so no dangling edges remain.
+// Note: This operation can be expensive for highly connected nodes as it requires
+// scanning and deleting all edges.
 func (tx *Tx) DeleteNode(id uuid.UUID) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
@@ -279,6 +309,10 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error {
 }
 
 // DeleteEdge removes a specific edge.
+// Note: Currently, deleting by EdgeID alone is not fully supported efficiently without an index.
+// Use DeleteEdgeBetween(src, dst, label) if available (planned for future).
+//
+// Deprecated: Use DeleteNode or specific edge removal logic when API expands.
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error {
 	// This is tricky because the Key-Value mapping is:
 	// Key -> EdgeID.
@@ -292,6 +326,8 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error {
 
 // READ OPERATIONS
 
+// GetNode retrieves a node's label by its ID.
+// Returns the label, a boolean indicating existence, and any error.
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error) {
 	key := encoding.EncodeNodeKey(id)
 	val, err := tx.Get(key) // Tx.Get handles batch vs snapshot reading
@@ -306,6 +342,8 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error) {
 	return label, true, nil
 }
 
+// GetProperties retrieves the properties map for a given node or edge ID.
+// Returns nil if no properties exist.
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 	key := encoding.EncodePropertyKey(id)
 	val, err := tx.Get(key)
@@ -318,7 +356,14 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 	return properties.UnmarshalProperties(val)
 }
 
-// OutEdges returns an iterator for outgoing edges.
+// OutEdges returns an iterator for outgoing edges from the given node ID.
+// Optionally filters by edge labels.
+//
+// Usage:
+//
+//	iter := tx.OutEdges(nodeID, "KNOWS", "WORKS_WITH")
+//	defer iter.Close()
+//	for iter.Next() { ... }
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator {
 	// Prefix: 0x02 + id
 	prefix := make([]byte, 1+16)
@@ -342,7 +387,8 @@ func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator {
 	return &edgeIterator{iter: iter, valid: iter.Valid(), first: true, labels: labels}
 }
 
-// InEdges returns an iterator for incoming edges.
+// InEdges returns an iterator for incoming edges to the given node ID.
+// Optionally filters by edge labels.
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator {
 	prefix := make([]byte, 1+16)
 	prefix[0] = encoding.PrefixEdgeIn
@@ -363,12 +409,14 @@ func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator {
 }
 
 // FindNodes scans the index.
+// Not implemented in Phase 1.
 func (tx *Tx) FindNodes(label, propKey, propValue string) NodeIterator {
 	// Phase 1: Not implementing index scan yet.
 	return &nodeIterator{err: errors.New("index scan not implemented in Phase 1")}
 }
 
 // ScanNodes scans all nodes in the database.
+// This is a full table scan and can be slow for large datasets.
 func (tx *Tx) ScanNodes() NodeIterator {
 	prefix := []byte{encoding.PrefixNode}
 	opts := &pebble.IterOptions{

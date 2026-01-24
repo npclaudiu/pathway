@@ -13,67 +13,32 @@ import (
 type Traversal struct {
 }
 
-// NewTraversalSource creates a new traversal starting point from a transaction.
-// Note: Spec says g := graph.NewTraversalSource(db), which implies it manages its own Tx?
-// Or we pass an existing Tx?
-// The spec example shows: db.Open(); g := NewTraversalSource(db); query := g.V() ... results, err := query.ToList()
-// This implies the query execution manages the transaction lifecycle OR we start one implicitly.
-// BUT, to prevent long running open transactions during query build, we might want `ToList` to start the Tx?
-// However, the `Graph` struct is the entry point.
-// Let's attach NewTraversalSource to *Database for now as per spec 13.6 scenario.
-
+// TraversalSource is the starting point for graph traversals.
+// It holds a reference to the database and spawns TraversalPipelines.
 type TraversalSource struct {
 	db *Database
 }
 
+// NewTraversalSource creates a new traversal source from a database instance.
+//
+// Usage:
+//
+//	g := pathway.NewTraversalSource(db)
 func NewTraversalSource(db *Database) *TraversalSource {
 	return &TraversalSource{db: db}
 }
 
-// V starts a traversal at specific Nodes or all Nodes.
-// This initiates a Read Transaction implicitly if one isn't active?
-// Problem: If we chain, we need a Tx.
-// Spec 13.2.2 says Traversal holds a reference to Storage Engine.
-// Let's make Traversal hold *Database and start Tx on execution?
-// OR Source starts Tx immediately?
-// Better: ToList() executes. But Steps need access to Tx for schema info?
-// Actually, strict iterators only need Tx at execution time.
-// But some optimizations (Index Injection) need schema.
-// For V1, simplest is: T holds *Database, and Start steps are lazy.
-// Wait, Step signature: func(prev Iterator) Iterator.
-// This means we build a chain of functions.
-// When ToList is called:
-// tx = db.BeginRead()
-// rootIter = ...
-// for each step: iter = step(iter)
-// drain(iter)
-// tx.Commit/Close()
-
-// But our iterator implementations (edgeIterator) need *Tx (or at least *pebble.Iterator from Tx).
-// So steps are closures that take a *Tx (or context) and return Iterator?
-// No, Spec says `Step func(prev Iterator) Iterator`.
-// This implies prev Iterator is already bound to a Tx.
-// So the Chain must operate within an active Tx context.
-
-// Revised Plan:
-// Traversal holds a pipeline of `func(Tx, Iterator) Iterator`.
-// Execution starts Tx, creates generic "Start" iterator, feeds through pipeline.
-
-type Step func(tx *Tx, prev Iterator) Iterator
-
-type RepeatConfig struct {
-	sub   func(*TraversalPipeline) *TraversalPipeline
-	until Predicate
-	times int
-	emit  bool
-}
-
-type TraversalPipeline struct {
-	db           *Database
-	steps        []Step
-	activeRepeat *RepeatConfig
-}
-
+// V starts a traversal.
+// If ids are provided, it starts at the specified nodes.
+// If no ids are provided, it starts a scan of all nodes in the graph.
+//
+// Usage:
+//
+//	// Start at specific node
+//	g.V("uuid-string").Out()...
+//
+//	// Start at all nodes (scan)
+//	g.V().HasLabel("Person")...
 func (ts *TraversalSource) V(ids ...string) *TraversalPipeline {
 	return &TraversalPipeline{
 		db: ts.db,
@@ -95,8 +60,32 @@ func (ts *TraversalSource) V(ids ...string) *TraversalPipeline {
 	}
 }
 
+// Step defines a processing step in the traversal pipeline.
+// It takes a transaction context and a previous iterator, and returns a new iterator.
+type Step func(tx *Tx, prev Iterator) Iterator
+
+// RepeatConfig holds configuration for repeat steps (loops).
+type RepeatConfig struct {
+	sub   func(*TraversalPipeline) *TraversalPipeline
+	until Predicate
+	times int
+	emit  bool
+}
+
+// TraversalPipeline represents a chain of query steps.
+type TraversalPipeline struct {
+	db           *Database
+	steps        []Step
+	activeRepeat *RepeatConfig
+}
+
 // Navigation Steps
 
+// Out moves to outgoing neighbor nodes, optionally filtering by edge label.
+//
+// Usage:
+//
+//	g.V().Out("KNOWS")...
 func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline {
 	// If we have an active repeat config effectively "open", calling another step "closes" it?
 	// Gremlin logic: .repeat(...).out(). "out" follows the repeat block.
@@ -121,6 +110,11 @@ func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline {
 	return tp
 }
 
+// In moves to incoming neighbor nodes, optionally filtering by edge label.
+//
+// Usage:
+//
+//	g.V().In("EMPLOYED_BY")...
 func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline {
 	tp.activeRepeat = nil
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
@@ -132,6 +126,7 @@ func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline {
 	return tp
 }
 
+// HasLabel filters the current stream of elements, keeping only those with the specified label(s).
 func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline {
 	tp.activeRepeat = nil
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
@@ -169,6 +164,13 @@ func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline {
 
 // Recursion Steps
 
+// Repeat repeats the provided sub-traversal.
+// It is used in conjunction with Until(), Times(), or Emit() to control the loop.
+//
+// Usage:
+//
+//	// 2-hop friends
+//	g.V().Repeat(func(t *TraversalPipeline) { return t.Out("KNOWS") }).Times(2)
 func (tp *TraversalPipeline) Repeat(sub func(*TraversalPipeline) *TraversalPipeline) *TraversalPipeline {
 	conf := &RepeatConfig{sub: sub}
 	tp.activeRepeat = conf
@@ -178,6 +180,7 @@ func (tp *TraversalPipeline) Repeat(sub func(*TraversalPipeline) *TraversalPipel
 	return tp
 }
 
+// Until terminates a Repeat loop when the predicate is true for the current element.
 func (tp *TraversalPipeline) Until(pred Predicate) *TraversalPipeline {
 	if tp.activeRepeat != nil {
 		tp.activeRepeat.until = pred
@@ -189,6 +192,7 @@ func (tp *TraversalPipeline) Until(pred Predicate) *TraversalPipeline {
 	return tp
 }
 
+// Times terminates a Repeat loop after a fixed number of iterations.
 func (tp *TraversalPipeline) Times(n int) *TraversalPipeline {
 	if tp.activeRepeat != nil {
 		tp.activeRepeat.times = n
@@ -196,6 +200,8 @@ func (tp *TraversalPipeline) Times(n int) *TraversalPipeline {
 	return tp
 }
 
+// Emit causes the Repeat loop to emit the current element at each iteration,
+// effectively returning intermediate results as well as the final results.
 func (tp *TraversalPipeline) Emit() *TraversalPipeline {
 	if tp.activeRepeat != nil {
 		tp.activeRepeat.emit = true
@@ -203,6 +209,10 @@ func (tp *TraversalPipeline) Emit() *TraversalPipeline {
 	return tp
 }
 
+// Path transforms the current stream to return the full path history of each element.
+// Usage:
+//
+//	g.V().Out().Path()
 func (tp *TraversalPipeline) Path() *TraversalPipeline {
 	tp.activeRepeat = nil
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
@@ -217,6 +227,8 @@ func (tp *TraversalPipeline) Path() *TraversalPipeline {
 
 // Projection Steps
 
+// Values extracts property values from the current elements.
+// Not fully implemented in Phase 1 (returns raw elements).
 func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
 	tp.activeRepeat = nil
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
@@ -232,6 +244,8 @@ func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
 
 // Terminal Steps
 
+// ToList executes the traversal pipeline and returns the results as a list.
+// This triggers the actual database transaction.
 func (tp *TraversalPipeline) ToList() ([]interface{}, error) {
 	if tp.db == nil {
 		return nil, ErrInvalidDatabase
@@ -304,12 +318,3 @@ func (tp *TraversalPipeline) ToList() ([]interface{}, error) {
 
 	return results, err
 }
-
-// Helpers for Iterators (Need to be defined)
-// - ScanNodes: Tx method
-// - fixedNodeIterator: Struct
-// - flatMapEdgeIterator: Struct
-// - filterIterator: Struct
-
-// To make this file compile, we need placeholders or implement them.
-// I will implement placeholders for the helper structs here or in iterators_impl.go and update Tx.
