@@ -5,7 +5,7 @@ go 1.25.4
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/google/uuid v1.3.0
-	google.golang.org/protobuf v1.33.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
