@@ -7,7 +7,7 @@ It provides a fluid, Gremlin-like query interface for natural graph traversals.
 > **NOTE**: This is an experimental library that was not validated for
 > production use.
 
-Vibe coded using [Google Antigravity](https://antigravityide.com).
+Vibe coded using [Google Antigravity](https://antigravity.google/).
 
 ## Key Features
 
