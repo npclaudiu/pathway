@@ -142,6 +142,9 @@ func TestAPICoverage(t *testing.T) {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Fatalf("Verification failed: %v", err)
+		}
 	})
 
 	// 3. Edge Operations
@@ -154,11 +157,14 @@ func TestAPICoverage(t *testing.T) {
 		u2 := uuid.New()
 
 		// Setup nodes
-		db.Update(ctx, func(tx *pathway.Tx) error {
-			tx.PutNode(u1, "User")
-			tx.PutNode(u2, "User")
-			return nil
-		})
+		if err := db.Update(ctx, func(tx *pathway.Tx) error {
+			if err := tx.PutNode(u1, "User"); err != nil {
+				return err
+			}
+			return tx.PutNode(u2, "User")
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		// A. PutEdge & Constraints
 		// Constraint: Missing node
@@ -169,6 +175,9 @@ func TestAPICoverage(t *testing.T) {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Fatalf("Constraint check failed to return (expected handled error inside): %v", err)
+		}
 
 		// Successful Put
 		var edgeID uuid.UUID
@@ -182,8 +191,8 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// B. Storage Verification
-		db.View(ctx, func(tx *pathway.Tx) error {
-			tx.Access(func(tx *pathway.Tx) error {
+		err = db.View(ctx, func(tx *pathway.Tx) error {
+			return tx.Access(func(tx *pathway.Tx) error {
 				outK := encodeEdgeOutKey(u1, u2, "KNOWS")
 				inK := encodeEdgeInKey(u1, u2, "KNOWS")
 
@@ -195,11 +204,13 @@ func TestAPICoverage(t *testing.T) {
 				}
 				return nil
 			})
-			return nil
 		})
+		if err != nil {
+			t.Errorf("Storage verification failed: %v", err)
+		}
 
 		// C. Traversal (Iterator)
-		db.View(ctx, func(tx *pathway.Tx) error {
+		if err := db.View(ctx, func(tx *pathway.Tx) error {
 			iter := tx.OutEdges(u1) // Should find 1
 			defer iter.Close()
 			found := false
@@ -213,7 +224,9 @@ func TestAPICoverage(t *testing.T) {
 				t.Error("Iterator: OutEdges did not find expected edge")
 			}
 			return nil
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		// D. Delete Cascade
 		err = db.Update(ctx, func(tx *pathway.Tx) error {
@@ -224,16 +237,18 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// Verify Edge Removed
-		db.View(ctx, func(tx *pathway.Tx) error {
-			tx.Access(func(tx *pathway.Tx) error {
+		err = db.View(ctx, func(tx *pathway.Tx) error {
+			return tx.Access(func(tx *pathway.Tx) error {
 				outK := encodeEdgeOutKey(u1, u2, "KNOWS")
 				if _, err := tx.Get(outK); err == nil {
 					t.Error("Storage: OutEdge key should be deleted")
 				}
 				return nil
 			})
-			return nil
 		})
+		if err != nil {
+			t.Errorf("Deletion verification failed: %v", err)
+		}
 	})
 
 	// 4. Property Operations
@@ -250,16 +265,20 @@ func TestAPICoverage(t *testing.T) {
 			"active": true,
 		}
 
-		db.Update(ctx, func(tx *pathway.Tx) error {
+		if err := db.Update(ctx, func(tx *pathway.Tx) error {
 			// Need node first? Properties are separate keys, but logical model usually implies node exists.
 			// System doesn't strictly enforce Property->Node dependency in `SetProperties` implementation?
 			// Let's create node for correctness.
-			tx.PutNode(id, "User")
+			if err := tx.PutNode(id, "User"); err != nil {
+				return err
+			}
 			return tx.SetProperties(id, props)
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		// B. Get Properties
-		db.View(ctx, func(tx *pathway.Tx) error {
+		if err := db.View(ctx, func(tx *pathway.Tx) error {
 			p, err := tx.GetProperties(id)
 			if err != nil {
 				t.Fatalf("GetProperties failed: %v", err)
@@ -272,7 +291,9 @@ func TestAPICoverage(t *testing.T) {
 				t.Errorf("Prop mismatch age: got %v (%T)", p["age"], p["age"])
 			}
 			return nil
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	// 5. Query API
@@ -284,12 +305,20 @@ func TestAPICoverage(t *testing.T) {
 		// Seeding: A -> B
 		a := uuid.New()
 		b := uuid.New()
-		db.Update(ctx, func(tx *pathway.Tx) error {
-			tx.PutNode(a, "A")
-			tx.PutNode(b, "B")
-			tx.PutEdge(a, b, "LINK")
+		if err := db.Update(ctx, func(tx *pathway.Tx) error {
+			if err := tx.PutNode(a, "A"); err != nil {
+				return err
+			}
+			if err := tx.PutNode(b, "B"); err != nil {
+				return err
+			}
+			if _, err := tx.PutEdge(a, b, "LINK"); err != nil {
+				return err
+			}
 			return nil
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		// A. Traversal
 		g := pathway.NewTraversalSource(db)
@@ -313,20 +342,32 @@ func TestAPICoverage(t *testing.T) {
 		// B. Filtering
 		// Add another edge A->C (Label C)
 		c := uuid.New()
-		db.Update(ctx, func(tx *pathway.Tx) error {
-			tx.PutNode(c, "C")
-			tx.PutEdge(a, c, "OTHER")
+		if err := db.Update(ctx, func(tx *pathway.Tx) error {
+			if err := tx.PutNode(c, "C"); err != nil {
+				return err
+			}
+			if _, err := tx.PutEdge(a, c, "OTHER"); err != nil {
+				return err
+			}
 			return nil
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 
 		// Query: A.Out(LINK) should only return B
 		results, err = g.V(a.String()).Out("LINK").ToList()
+		if err != nil {
+			t.Errorf("Query failed: %v", err)
+		}
 		if len(results) != 1 {
 			t.Errorf("Filter: Expected 1 result, got %d", len(results))
 		}
 
 		// Query: A.Out() should return B and C
 		results, err = g.V(a.String()).Out().ToList()
+		if err != nil {
+			t.Errorf("Query failed: %v", err)
+		}
 		if len(results) != 2 {
 			t.Errorf("NoFilter: Expected 2 results, got %d", len(results))
 		}

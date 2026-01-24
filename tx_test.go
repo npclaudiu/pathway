@@ -46,9 +46,11 @@ func TestTx_PutEdge_Dangling(t *testing.T) {
 	}
 
 	// Add U1 only
-	db.Update(ctx, func(tx *Tx) error {
+	if err := db.Update(ctx, func(tx *Tx) error {
 		return tx.PutNode(u1, "User")
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	err = db.Update(ctx, func(tx *Tx) error {
 		_, err := tx.PutEdge(u1, u2, "REL")
@@ -95,12 +97,16 @@ func TestTx_ScanNodes(t *testing.T) {
 	ctx := context.Background()
 
 	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
-	db.Update(ctx, func(tx *Tx) error {
+	if err := db.Update(ctx, func(tx *Tx) error {
 		for _, id := range ids {
-			tx.PutNode(id, "User")
+			if err := tx.PutNode(id, "User"); err != nil {
+				return err
+			}
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	err := db.View(ctx, func(tx *Tx) error {
 		it := tx.ScanNodes()
@@ -171,12 +177,13 @@ func TestTx_Iterator_GenericMethods(t *testing.T) {
 	ctx := context.Background()
 
 	id := uuid.New()
-	db.Update(ctx, func(tx *Tx) error {
-		tx.PutNode(id, "A")
-		return nil
-	})
+	if err := db.Update(ctx, func(tx *Tx) error {
+		return tx.PutNode(id, "A")
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	db.View(ctx, func(tx *Tx) error {
+	if err := db.View(ctx, func(tx *Tx) error {
 		it := tx.ScanNodes()
 		defer it.Close()
 
@@ -195,15 +202,13 @@ func TestTx_Iterator_GenericMethods(t *testing.T) {
 				t.Error("SeekGE failed")
 			}
 			// Path
-			p := it.Path()
-			if p == nil { // scanNodes returns nil path? No, implementation wrapper?
-				// nodeIterator doesn't implement Path, iterator wrapper does return nil?
-				// Let's check iterator.go
-			}
+			_ = it.Path()
 		}
 		if it.Error() != nil {
 			t.Error(it.Error())
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

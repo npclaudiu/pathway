@@ -15,9 +15,11 @@ func TestSnapshot(t *testing.T) {
 
 	// 1. Create Data
 	id := uuid.New()
-	db.Update(ctx, func(tx *Tx) error {
+	if err := db.Update(ctx, func(tx *Tx) error {
 		return tx.PutNode(id, "SnapNode")
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// 2. Take Snapshot
 	snap, err := db.NewSnapshot(ctx)
@@ -37,9 +39,11 @@ func TestSnapshot(t *testing.T) {
 	}
 
 	// 4. Update DB (should not affect snapshot)
-	db.Update(ctx, func(tx *Tx) error {
+	if err := db.Update(ctx, func(tx *Tx) error {
 		return tx.DeleteNode(id)
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	val2, err := snap.Get(key)
 	if err != nil {

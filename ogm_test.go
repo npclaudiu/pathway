@@ -22,17 +22,20 @@ func TestTx_Load(t *testing.T) {
 	id := uuid.New()
 
 	// Setup data
-	db.Update(ctx, func(tx *Tx) error {
-		tx.PutNode(id, "User")
-		tx.SetProperties(id, map[string]interface{}{
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(id, "User"); err != nil {
+			return err
+		}
+		return tx.SetProperties(id, map[string]interface{}{
 			"name": "Alice",
 			"age":  30, // Passed as int, stored as int (or float via protobuf if internally converted, usually float64)
 		})
-		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test Success
-	db.View(ctx, func(tx *Tx) error {
+	if err := db.View(ctx, func(tx *Tx) error {
 		var u UserStruct
 		err := tx.Load(id, &u)
 		if err != nil {
@@ -46,10 +49,12 @@ func TestTx_Load(t *testing.T) {
 			t.Errorf("Age mismatch: %d", u.Age)
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test Errors
-	db.View(ctx, func(tx *Tx) error {
+	if err := db.View(ctx, func(tx *Tx) error {
 		// Nil
 		if err := tx.Load(id, nil); err == nil {
 			t.Error("expected error for nil")
@@ -66,10 +71,12 @@ func TestTx_Load(t *testing.T) {
 		}
 
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test Node Not Found
-	db.View(ctx, func(tx *Tx) error {
+	if err := db.View(ctx, func(tx *Tx) error {
 		var u UserStruct
 		// Random ID, not in DB. But Wait, GetProperties returns nil, nil if no props?
 		// Tx.Load calls GetProperties -> returns nil, nil -> returns ErrNodeNotFound?
@@ -80,5 +87,7 @@ func TestTx_Load(t *testing.T) {
 			t.Errorf("expected ErrNodeNotFound, got %v", err)
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

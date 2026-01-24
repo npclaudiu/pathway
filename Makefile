@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration generate install-protoc-gen-go fmt vet tidy check
+.PHONY: test test-unit test-integration generate install-protoc-gen-go fmt vet tidy check install-lint lint
 
 test: test-unit test-integration
 
@@ -24,4 +24,10 @@ vet:
 tidy:
 	go mod tidy
 
-check: fmt vet tidy
+check: fmt vet tidy lint
+
+install-lint:
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+lint: install-lint
+	$(shell go env GOPATH)/bin/golangci-lint run

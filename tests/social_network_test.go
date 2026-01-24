@@ -70,17 +70,23 @@ func TestSocialNetworkQueries(t *testing.T) {
 		if err := tx.PutNode(posts["AliceIntro"], "Post"); err != nil {
 			return err
 		}
-		tx.SetProperties(posts["AliceIntro"], map[string]interface{}{"content": "Hello World", "likes": 0})
+		if err := tx.SetProperties(posts["AliceIntro"], map[string]interface{}{"content": "Hello World", "likes": 0}); err != nil {
+			return err
+		}
 
 		if err := tx.PutNode(posts["BobUpdate"], "Post"); err != nil {
 			return err
 		}
-		tx.SetProperties(posts["BobUpdate"], map[string]interface{}{"content": "Bob is here", "likes": 5})
+		if err := tx.SetProperties(posts["BobUpdate"], map[string]interface{}{"content": "Bob is here", "likes": 5}); err != nil {
+			return err
+		}
 
 		if err := tx.PutNode(posts["CharliePic"], "Post"); err != nil {
 			return err
 		}
-		tx.SetProperties(posts["CharliePic"], map[string]interface{}{"content": "Sunset", "likes": 100})
+		if err := tx.SetProperties(posts["CharliePic"], map[string]interface{}{"content": "Sunset", "likes": 100}); err != nil {
+			return err
+		}
 
 		// Create Edges: FOLLOWS
 		// Alice -> Bob, Charlie

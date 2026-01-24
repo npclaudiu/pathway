@@ -13,9 +13,11 @@ func TestQuery_V_InvalidUUID(t *testing.T) {
 
 	// Create one valid node
 	id := uuid.New()
-	db.Update(context.Background(), func(tx *Tx) error {
+	if err := db.Update(context.Background(), func(tx *Tx) error {
 		return tx.PutNode(id, "Thing")
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	g := NewTraversalSource(db)
 
@@ -48,12 +50,20 @@ func TestQuery_Path_Check(t *testing.T) {
 
 	u1 := uuid.New()
 	u2 := uuid.New()
-	db.Update(ctx, func(tx *Tx) error {
-		tx.PutNode(u1, "A")
-		tx.PutNode(u2, "B")
-		tx.PutEdge(u1, u2, "LINK")
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(u1, "A"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(u2, "B"); err != nil {
+			return err
+		}
+		if _, err := tx.PutEdge(u1, u2, "LINK"); err != nil {
+			return err
+		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	g := NewTraversalSource(db)
 
@@ -113,11 +123,17 @@ func TestQuery_HasLabel(t *testing.T) {
 
 	u1 := uuid.New()
 	u2 := uuid.New()
-	db.Update(ctx, func(tx *Tx) error {
-		tx.PutNode(u1, "Person")
-		tx.PutNode(u2, "Robot")
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(u1, "Person"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(u2, "Robot"); err != nil {
+			return err
+		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	g := NewTraversalSource(db)
 
@@ -143,12 +159,20 @@ func TestQuery_In(t *testing.T) {
 
 	u1 := uuid.New()
 	u2 := uuid.New()
-	db.Update(ctx, func(tx *Tx) error {
-		tx.PutNode(u1, "A")
-		tx.PutNode(u2, "B")
-		tx.PutEdge(u1, u2, "LINK")
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(u1, "A"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(u2, "B"); err != nil {
+			return err
+		}
+		if _, err := tx.PutEdge(u1, u2, "LINK"); err != nil {
+			return err
+		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	g := NewTraversalSource(db)
 
@@ -171,14 +195,26 @@ func TestQuery_Repeat(t *testing.T) {
 	a := uuid.New()
 	b := uuid.New()
 	c := uuid.New()
-	db.Update(ctx, func(tx *Tx) error {
-		tx.PutNode(a, "Node")
-		tx.PutNode(b, "Node")
-		tx.PutNode(c, "Node")
-		tx.PutEdge(a, b, "NEXT")
-		tx.PutEdge(b, c, "NEXT")
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(a, "Node"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(b, "Node"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(c, "Node"); err != nil {
+			return err
+		}
+		if _, err := tx.PutEdge(a, b, "NEXT"); err != nil {
+			return err
+		}
+		if _, err := tx.PutEdge(b, c, "NEXT"); err != nil {
+			return err
+		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	g := NewTraversalSource(db)
 
@@ -200,9 +236,11 @@ func TestQuery_Values(t *testing.T) {
 	db, _ := Open(":memory:")
 	defer db.Close()
 	id := uuid.New()
-	db.Update(context.Background(), func(tx *Tx) error {
+	if err := db.Update(context.Background(), func(tx *Tx) error {
 		return tx.PutNode(id, "Node")
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	g := NewTraversalSource(db)
 	res, err := g.V(id.String()).Values("any").ToList()

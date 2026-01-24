@@ -3,7 +3,6 @@ package pathway
 import (
 	"errors"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/google/uuid"
 	"github.com/npclaudiu/pathway/internal/encoding"
 )
@@ -41,39 +40,6 @@ type EdgeIterator interface {
 type NodeIterator interface {
 	Iterator // Embed generic iterator
 	Node() (uuid.UUID, string, error)
-}
-
-// pebbleIteratorWrapper wraps a *pebble.Iterator to satisfy the Iterator interface.
-type pebbleIteratorWrapper struct {
-	iter *pebble.Iterator
-}
-
-func (p *pebbleIteratorWrapper) Next() bool {
-	return p.iter.Next()
-}
-
-func (p *pebbleIteratorWrapper) SeekGE(key []byte) bool {
-	return p.iter.SeekGE(key)
-}
-
-func (p *pebbleIteratorWrapper) Key() []byte {
-	return p.iter.Key()
-}
-
-func (p *pebbleIteratorWrapper) Value() []byte {
-	return p.iter.Value()
-}
-
-func (p *pebbleIteratorWrapper) Valid() bool {
-	return p.iter.Valid()
-}
-
-func (p *pebbleIteratorWrapper) Close() error {
-	return p.iter.Close()
-}
-
-func (p *pebbleIteratorWrapper) Error() error {
-	return p.iter.Error()
 }
 
 // edgeIterator implements EdgeIterator using the generic Iterator.
@@ -413,7 +379,6 @@ func (it *flatMapEdgeIterator) Path() []interface{} {
 type filterIterator struct {
 	prev Iterator
 	pred func(interface{}) bool
-	err  error
 }
 
 func newFilterIterator(prev Iterator, pred func(interface{}) bool) *filterIterator {
@@ -463,7 +428,6 @@ func (it *filterIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 type pathIterator struct {
 	prev    Iterator
 	curPath []interface{}
-	err     error
 }
 
 func newPathIterator(prev Iterator) *pathIterator {
@@ -522,8 +486,6 @@ func (it *repeatIterator) Next() bool {
 			var lbl string
 			if ni, ok := it.prev.(NodeIterator); ok {
 				id, lbl, _ = ni.Node()
-			} else {
-				// Fallback: only support Node recursion for V1
 			}
 			it.queue = append(it.queue, traverser{
 				id: id, label: lbl, path: it.prev.Path(), depth: 0,

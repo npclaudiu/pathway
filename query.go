@@ -9,10 +9,8 @@ import (
 )
 
 // Traversal represents a fluent query builder.
+// Currently empty but kept for type safety and potential future state.
 type Traversal struct {
-	tx   *Tx
-	iter Iterator // The current iterator in the pipeline
-	err  error
 }
 
 // NewTraversalSource creates a new traversal starting point from a transaction.
