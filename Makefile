@@ -23,6 +23,10 @@ test-unit:
 test-integration:
 	go test -v ./tests/...
 
+.PHONY: bench
+bench:
+	go test -bench=. -benchmem -v ./benchmarks/...
+
 .PHONY: generate
 generate: $(PROTOC_GEN_GO)
 	PATH=$(LOCAL_BIN):$(PATH) protoc --go_out=. --go_opt=paths=source_relative internal/proto/*.proto
