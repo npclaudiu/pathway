@@ -212,6 +212,107 @@ func (it *nodeIterator) Valid() bool            { return it.valid }
 func (it *nodeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
 func (it *nodeIterator) Path() []interface{}    { return it.iter.Path() }
 
+// nodeIndexIterator implements NodeIterator using the index keys.
+type nodeIndexIterator struct {
+	iter  Iterator
+	valid bool
+	err   error
+	first bool
+}
+
+func (it *nodeIndexIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
+	if it.first {
+		it.first = false
+		return it.valid
+	}
+	it.valid = it.iter.Next()
+	return it.valid
+}
+
+func (it *nodeIndexIterator) Node() (uuid.UUID, string, error) {
+	if !it.valid {
+		return uuid.Nil, "", it.Error()
+	}
+	// Key format: [EncodeIndexPrefix...] + [NodeID: 16 bytes]
+	key := it.iter.Key()
+	if len(key) < 17 { // Minimum is prefix (1) + NodeID (16)
+		return uuid.Nil, "", encoding.ErrInvalidKeyFormat
+	}
+
+	// Extract NodeID from the end
+	var id uuid.UUID
+	copy(id[:], key[len(key)-16:])
+
+	// Reconstruct Label from prefix
+	// format: [Prefix:1] [LabelLen:2] [Label]
+	offset := 1
+	label, n := encoding.DecodeLabel(key[offset:])
+	if n == 0 {
+		return uuid.Nil, "", encoding.ErrInvalidKeyFormat
+	}
+
+	return id, label, nil
+}
+
+func (it *nodeIndexIterator) Close() error {
+	if it.iter != nil {
+		return it.iter.Close()
+	}
+	return nil
+}
+
+func (it *nodeIndexIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	if it.iter != nil {
+		return it.iter.Error()
+	}
+	return nil
+}
+
+func (it *nodeIndexIterator) Key() []byte {
+	// Reconstruct Node key for standard Iterator interface
+	if !it.valid {
+		return nil
+	}
+	id, _, err := it.Node()
+	if err != nil {
+		return nil
+	}
+	return encoding.EncodeNodeKey(id)
+}
+
+func (it *nodeIndexIterator) Value() []byte {
+	// Reconstruct Value for standard Iterator interface
+	if !it.valid {
+		return nil
+	}
+	_, label, err := it.Node()
+	if err != nil {
+		return nil
+	}
+	return []byte(label)
+}
+
+func (it *nodeIndexIterator) Valid() bool            { return it.valid }
+func (it *nodeIndexIterator) SeekGE(key []byte) bool { return false } // Seek on index iterator implies index seek, which means prefix needs to change.
+func (it *nodeIndexIterator) Path() []interface{} {
+	if !it.valid {
+		return nil
+	}
+	id, label, err := it.Node()
+	if err != nil {
+		return nil
+	}
+	return []interface{}{
+		map[string]interface{}{"id": id, "label": label, "type": "node"},
+	}
+}
+
 // fixedNodeIterator iterates over a fixed slice of UUIDs
 type fixedNodeIterator struct {
 	tx     *Tx

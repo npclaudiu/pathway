@@ -74,15 +74,64 @@ func TestTx_DeleteEdge_NotImplemented(t *testing.T) {
 	}
 }
 
-func TestTx_FindNodes_NotImplemented(t *testing.T) {
+func TestTx_FindNodes(t *testing.T) {
 	db, _ := Open(":memory:")
 	defer db.Close()
 	ctx := context.Background()
 
-	err := db.View(ctx, func(tx *Tx) error {
-		it := tx.FindNodes("User", "name", "val")
-		if it.Error() == nil {
-			t.Error("expected error from FindNodes")
+	id1 := uuid.New()
+	id2 := uuid.New()
+
+	// Seed properties
+	err := db.Update(ctx, func(tx *Tx) error {
+		tx.PutNode(id1, "User")
+		tx.SetProperties(id1, map[string]interface{}{"name": "alice", "age": 30})
+
+		tx.PutNode(id2, "User")
+		tx.SetProperties(id2, map[string]interface{}{"name": "bob", "age": 40})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test FindNodes positive case
+	err = db.View(ctx, func(tx *Tx) error {
+		it := tx.FindNodes("User", "name", "alice")
+		defer it.Close()
+
+		if !it.Next() {
+			t.Error("expected to find node")
+		}
+
+		id, lbl, err := it.Node()
+		if err != nil {
+			t.Error(err)
+		}
+		if id != id1 {
+			t.Errorf("expected id %v, got %v", id1, id)
+		}
+		if lbl != "User" {
+			t.Errorf("expected label User, got %s", lbl)
+		}
+
+		if it.Next() {
+			t.Error("expected exactly one node")
+		}
+		return nil
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test FindNodes negative case
+	err = db.View(ctx, func(tx *Tx) error {
+		it := tx.FindNodes("User", "name", "charlie")
+		defer it.Close()
+
+		if it.Next() {
+			t.Error("expected no nodes")
 		}
 		return nil
 	})

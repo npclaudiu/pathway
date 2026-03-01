@@ -106,3 +106,39 @@ func numericToBytes(val interface{}) []byte {
 		return nil
 	}
 }
+
+// EncodeIndexPrefix creates a prefix for scanning an index.
+// Format: [PrefixIndex] + [Label length: 2 bytes] + [Label] + [Key length: 2 bytes] + [Key] + [Value]
+func EncodeIndexPrefix(label, propKey, propValue string) []byte {
+	lblBytes := []byte(label)
+	keyBytes := []byte(propKey)
+	valBytes := []byte(propValue)
+
+	k := make([]byte, 1+2+len(lblBytes)+2+len(keyBytes)+len(valBytes))
+	k[0] = PrefixIndex
+
+	offset := 1
+	binary.BigEndian.PutUint16(k[offset:], uint16(len(lblBytes)))
+	offset += 2
+	copy(k[offset:], lblBytes)
+	offset += len(lblBytes)
+
+	binary.BigEndian.PutUint16(k[offset:], uint16(len(keyBytes)))
+	offset += 2
+	copy(k[offset:], keyBytes)
+	offset += len(keyBytes)
+
+	copy(k[offset:], valBytes)
+
+	return k
+}
+
+// EncodeIndexKey creates a full index key for a specific node property.
+// Format: [EncodeIndexPrefix] + [NodeID: 16 bytes]
+func EncodeIndexKey(label, propKey, propValue string, id uuid.UUID) []byte {
+	prefix := EncodeIndexPrefix(label, propKey, propValue)
+	k := make([]byte, len(prefix)+16)
+	copy(k, prefix)
+	copy(k[len(prefix):], id[:])
+	return k
+}

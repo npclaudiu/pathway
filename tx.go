@@ -3,6 +3,7 @@ package pathway
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/google/uuid"
@@ -233,6 +234,39 @@ func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 		return pebble.ErrReadOnly
 	}
 
+	// 1. Maintain Index (only for Nodes)
+	lbl, isNode, err := tx.GetNode(id)
+	if err != nil {
+		return err
+	}
+
+	if isNode {
+		// Fetch old properties to delete from index
+		oldProps, err := tx.GetProperties(id)
+		if err != nil {
+			return err
+		}
+
+		// Delete old index entries
+		for k, v := range oldProps {
+			valStr := fmt.Sprintf("%v", v)
+			idxKey := encoding.EncodeIndexKey(lbl, k, valStr, id)
+			if err := tx.batch.Delete(idxKey, nil); err != nil {
+				return err
+			}
+		}
+
+		// Add new index entries
+		for k, v := range props {
+			valStr := fmt.Sprintf("%v", v)
+			idxKey := encoding.EncodeIndexKey(lbl, k, valStr, id)
+			if err := tx.batch.Set(idxKey, nil, nil); err != nil { // empty value for index
+				return err
+			}
+		}
+	}
+
+	// 2. Set actual properties
 	data, err := properties.MarshalProperties(props)
 	if err != nil {
 		return err
@@ -249,6 +283,27 @@ func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 func (tx *Tx) DeleteNode(id uuid.UUID) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
+	}
+
+	// Get label before deleting for index cleanup
+	lbl, isNode, err := tx.GetNode(id)
+	if err != nil {
+		return err
+	}
+
+	if isNode {
+		// Clean up index
+		oldProps, err := tx.GetProperties(id)
+		if err != nil {
+			return err
+		}
+		for k, v := range oldProps {
+			valStr := fmt.Sprintf("%v", v)
+			idxKey := encoding.EncodeIndexKey(lbl, k, valStr, id)
+			if err := tx.batch.Delete(idxKey, nil); err != nil {
+				return err
+			}
+		}
 	}
 
 	// 1. Delete Node Key
@@ -409,10 +464,20 @@ func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator {
 }
 
 // FindNodes scans the index.
-// Not implemented in Phase 1.
 func (tx *Tx) FindNodes(label, propKey, propValue string) NodeIterator {
-	// Phase 1: Not implementing index scan yet.
-	return &nodeIterator{err: errors.New("index scan not implemented in Phase 1")}
+	prefix := encoding.EncodeIndexPrefix(label, propKey, propValue)
+	opts := &pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: keyUpperBound(prefix),
+	}
+
+	iter, err := tx.NewIterator(opts)
+	if err != nil {
+		return &nodeIndexIterator{err: err}
+	}
+
+	iter.SeekGE(prefix)
+	return &nodeIndexIterator{iter: iter, valid: iter.Valid(), first: true}
 }
 
 // ScanNodes scans all nodes in the database.
