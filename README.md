@@ -156,6 +156,8 @@ callback error rolls back the entire batch—even if a writer error is
 accidentally ignored. Within one callback, Pathway caches node-existence checks,
 so many edges sharing endpoints do not repeatedly read the same node records.
 The writer is valid only during its callback and is not safe for concurrent use.
+Ordinary `Tx.PutEdge` also validates endpoints with existence-only key probes;
+it does not copy or decode node labels.
 
 ### Fluid Query Capabilities
 

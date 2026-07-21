@@ -17,7 +17,7 @@ Run focused suites:
 ```bash
 go test ./benchmarks -run '^$' -bench 'Benchmark(GetNode|ScanNodes|FindNodes)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|BFS_2Hop)$' -benchmem -count 5
-go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge|BulkInsertEdge_100)$' -benchmem -count 5
+go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge|BulkInsertEdge_100|InsertEdgeLargeEndpointLabels)$' -benchmem -count 5
 ```
 
 `BenchmarkScanNodes` measures a full node scan. `BenchmarkFindNodes` separately
@@ -44,6 +44,9 @@ successful updates may be lost after a process or machine crash.
 nodes in one bulk callback, exercising the endpoint cache: each distinct
 endpoint is validated once per batch. Compare it with `BenchmarkInsertEdge` to
 separate batching and validation reuse from single-transaction latency.
+`BenchmarkInsertEdgeLargeEndpointLabels` uses maximum-length node labels to
+make accidental endpoint-value copies show up clearly in allocation and byte
+metrics; correct existence-only validation does not scale with label size.
 
 For before/after comparisons, capture both revisions and use `benchstat`:
 

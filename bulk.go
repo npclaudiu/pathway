@@ -9,8 +9,8 @@ import (
 
 // BulkWriter stages graph insertions in one atomic Database.BulkUpdate. It
 // caches node-existence checks so edges that share endpoints do not repeatedly
-// read and decode the same node records. A BulkWriter is valid only during its
-// callback and must not be used concurrently.
+// probe the same node records. A BulkWriter is valid only during its callback
+// and must not be used concurrently.
 type BulkWriter struct {
 	tx            *Tx
 	nodeExistence map[uuid.UUID]bool
@@ -89,7 +89,7 @@ func (w *BulkWriter) nodeExists(id uuid.UUID) (bool, error) {
 	if exists, cached := w.nodeExistence[id]; cached {
 		return exists, nil
 	}
-	_, exists, err := w.tx.GetNode(id)
+	exists, err := w.tx.nodeExists(id)
 	if err != nil {
 		return false, w.fail(err)
 	}

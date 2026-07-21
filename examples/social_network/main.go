@@ -47,6 +47,8 @@ func run() error {
 			}
 		}
 
+		// Both nodes were staged above, so endpoint validation is served by the
+		// bulk writer's cache without additional node reads.
 		followsID, err = writer.PutEdge(alice, bob, "FOLLOWS")
 		if err != nil {
 			return err

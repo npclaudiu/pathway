@@ -70,7 +70,8 @@ Pathway is schema-less, but conceptually we will model:
 
 We use `db.BulkUpdate` to seed the graph in one atomic commit. Its writer caches
 edge endpoint validation, which is especially useful when many imported edges
-share nodes.
+share nodes. Endpoint validation checks node-key existence without copying or
+decoding labels; each distinct endpoint is probed at most once per callback.
 
 ```go
 func seedData(ctx context.Context, db *pathway.Database) (map[string]uuid.UUID, map[string]uuid.UUID, error) {

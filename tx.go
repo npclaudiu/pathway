@@ -190,9 +190,10 @@ func (tx *Tx) PutNode(id uuid.UUID, label string) error {
 	return tx.batch.Set(key, val, nil)
 }
 
-// PutEdge creates a directed edge between two nodes. Pathway uses multigraph
-// semantics: every call creates a distinct edge, even when the endpoints and
-// label match an existing edge.
+// PutEdge creates a directed edge between two existing nodes. Endpoint checks
+// test key existence without copying or decoding node labels. Pathway uses
+// multigraph semantics: every call creates a distinct edge, even when the
+// endpoints and label match an existing edge.
 // It performs a dual-write, creating both an outgoing key (for traversals from source)
 // and an incoming key (for traversals to target).
 //
@@ -206,12 +207,7 @@ func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 		return uuid.Nil, pebble.ErrReadOnly
 	}
 
-	// 1. Verify source and target nodes exist
-	// This requires a Get on the batch or DB.
-	// Note: If nodes were just added in this batch, we must read from the batch (Reader interface).
-	// Our Tx structs have readers.
-
-	_, exists, err := tx.GetNode(srcID)
+	exists, err := tx.nodeExists(srcID)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -219,7 +215,7 @@ func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 		return uuid.Nil, ErrDanglingEdge
 	}
 
-	_, exists, err = tx.GetNode(dstID)
+	exists, err = tx.nodeExists(dstID)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -462,6 +458,28 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error {
 }
 
 // READ OPERATIONS
+
+// nodeExists checks only for a node key. It deliberately avoids Tx.Get and
+// GetNode because endpoint validation does not need to copy or decode labels.
+// Reading through the indexed batch preserves read-your-writes for nodes staged
+// earlier in the same update.
+func (tx *Tx) nodeExists(id uuid.UUID) (bool, error) {
+	reader := tx.reader
+	if !tx.readOnly {
+		reader = tx.batch
+	}
+	_, closer, err := reader.Get(encoding.EncodeNodeKey(id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := closer.Close(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 // GetNode retrieves a node's label by its ID.
 // Returns the label, a boolean indicating existence, and any error.

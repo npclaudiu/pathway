@@ -64,6 +64,53 @@ func TestTx_PutEdge_Dangling(t *testing.T) {
 	}
 }
 
+func TestTx_NodeExistsReadsOwnWrites(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	ctx := context.Background()
+	id := uuid.New()
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		exists, err := tx.nodeExists(id)
+		if err != nil {
+			return err
+		}
+		if exists {
+			t.Fatal("missing node reported as existing")
+		}
+		if err := tx.PutNode(id, "endpoint"); err != nil {
+			return err
+		}
+		exists, err = tx.nodeExists(id)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			t.Fatal("node staged in the batch was not found")
+		}
+		_, err = tx.PutEdge(id, id, "SELF")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.View(ctx, func(tx *Tx) error {
+		exists, err := tx.nodeExists(id)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			t.Fatal("committed node was not found through snapshot")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTx_PutEdge_AllowsParallelEdges(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {

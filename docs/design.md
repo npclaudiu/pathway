@@ -94,8 +94,9 @@ particular character, despite the wording of `ErrInvalidLabel`.
 
 ### Edges
 
-`PutEdge` generates a fresh UUID and requires both endpoint nodes to be visible
-through the current transaction. It creates three records:
+`PutEdge` generates a fresh UUID and requires both endpoint node keys to be
+visible through the current transaction. Validation probes existence without
+copying or decoding labels. It creates three records:
 
 1. an outgoing adjacency record anchored at the source;
 2. an incoming adjacency record anchored at the target;
@@ -317,12 +318,13 @@ callback mistakenly returns `nil`. This prevents a partially successful import
 from committing. A callback error also aborts the batch. The writer is marked
 closed when the callback ends and is not safe for concurrent use.
 
-Its UUID-to-existence map avoids repeated node reads during edge-heavy imports.
+Its UUID-to-existence map avoids repeated node probes during edge-heavy imports.
 `PutNode` records the new node immediately, so a later edge to that node needs
-no endpoint read. For pre-existing nodes, the first `PutEdge` point-reads and
-decodes each distinct endpoint; later edges reuse the cached result. A
-package-private `Tx.putEdge` performs the three edge writes after either normal
-`Tx.PutEdge` validation or cached bulk validation. It must remain unexported.
+no endpoint read. For pre-existing nodes, the first `PutEdge` performs an
+existence-only probe for each distinct endpoint; later edges reuse the cached
+result. The package-private `Tx.putEdge` performs the three edge writes after
+either normal `Tx.PutEdge` validation or cached bulk validation. It must remain
+unexported.
 
 The context passed to `Update` is stored on `Tx` but is not checked by point
 reads, scans, or commit. Cancellation therefore does not currently interrupt a
@@ -374,15 +376,17 @@ old or new label.
 
 ### `PutEdge`
 
-1. Point-read both endpoint nodes; missing endpoints return `ErrDanglingEdge`.
+1. Probe both endpoint node keys without copying or decoding their values;
+   missing endpoints return `ErrDanglingEdge`.
 2. Generate an edge UUID.
 3. Encode outgoing, incoming, and reverse records.
 4. Write all three to the batch.
 
-The endpoint checks are correctness reads and a current ingestion cost. Edge
-properties, if any, require a separate `SetProperties` call in the same update.
-`BulkWriter.PutEdge` instead validates each distinct endpoint once per bulk
-callback and then uses the same package-private edge write path.
+The existence probes read through the indexed batch, preserving read-your-writes
+for nodes created earlier in the same update. Edge properties, if any, require a
+separate `SetProperties` call in the same update. `BulkWriter.PutEdge` validates
+each distinct endpoint once per bulk callback and then uses the same
+package-private edge write path.
 
 ### `SetProperties`
 
@@ -639,8 +643,8 @@ The principal costs and write amplification are architectural, not incidental:
 | Create node | existence read, node write |
 | Relabel node | node write; with relevant indexes, property read plus deletes/inserts for configured properties |
 | Set node properties | property encode/write; with indexes, old-property read/decode plus writes for changed configured values |
-| Create edge | two endpoint reads, three record writes |
-| Bulk-create edges | at most one endpoint read per distinct node in the callback, three record writes per edge |
+| Create edge | two existence-only endpoint probes, three record writes |
+| Bulk-create edges | at most one existence-only probe per distinct node in the callback, three record writes per edge |
 | Set edge properties | reverse-record existence read, property encode/write |
 | Delete edge | reverse point read, four deletes |
 | Delete node | property/index work, two adjacency scans, incident-edge UUID set, four deletes per edge |

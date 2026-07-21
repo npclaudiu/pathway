@@ -101,7 +101,7 @@ var (
 <a name="BulkWriter"></a>
 ## type [BulkWriter](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L14-L19>)
 
-BulkWriter stages graph insertions in one atomic Database.BulkUpdate. It caches node\-existence checks so edges that share endpoints do not repeatedly read and decode the same node records. A BulkWriter is valid only during its callback and must not be used concurrently.
+BulkWriter stages graph insertions in one atomic Database.BulkUpdate. It caches node\-existence checks so edges that share endpoints do not repeatedly probe the same node records. A BulkWriter is valid only during its callback and must not be used concurrently.
 
 ```go
 type BulkWriter struct {
@@ -794,7 +794,7 @@ func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
 Delete deletes the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.DeleteEdge"></a>
-### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L424>)
+### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L420>)
 
 ```go
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
@@ -803,7 +803,7 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
 DeleteEdge removes a specific edge, including both adjacency records, its reverse\-index record, and its properties.
 
 <a name="Tx.DeleteNode"></a>
-### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L353>)
+### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L349>)
 
 ```go
 func (tx *Tx) DeleteNode(id uuid.UUID) error
@@ -812,7 +812,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error
 DeleteNode deletes a node and all its incident edges \(both outgoing and incoming\), including each edge's reverse\-index entry and properties. Its cost is linear in the node's degree.
 
 <a name="Tx.FindNodes"></a>
-### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L553>)
+### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L571>)
 
 ```go
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator
@@ -830,7 +830,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error)
 Get retrieves the raw value for a given key. It handles the difference between read\-only readers and write batches.
 
 <a name="Tx.GetNode"></a>
-### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L468>)
+### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L486>)
 
 ```go
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
@@ -839,7 +839,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
 GetNode retrieves a node's label by its ID. Returns the label, a boolean indicating existence, and any error.
 
 <a name="Tx.GetProperties"></a>
-### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L484>)
+### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L502>)
 
 ```go
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
@@ -848,7 +848,7 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
 GetProperties retrieves the properties map for a given node or edge ID. Returns nil if no properties exist.
 
 <a name="Tx.InEdges"></a>
-### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L529>)
+### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L547>)
 
 ```go
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -875,7 +875,7 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
 NewIterator creates a new low\-level iterator for the transaction. This is primarily for internal use; users should typically use high\-level iterators like ScanNodes, OutEdges, etc.
 
 <a name="Tx.OutEdges"></a>
-### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L504>)
+### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L522>)
 
 ```go
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -892,13 +892,13 @@ for iter.Next() { ... }
 ```
 
 <a name="Tx.PutEdge"></a>
-### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L204>)
+### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L205>)
 
 ```go
 func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error)
 ```
 
-PutEdge creates a directed edge between two nodes. Pathway uses multigraph semantics: every call creates a distinct edge, even when the endpoints and label match an existing edge. It performs a dual\-write, creating both an outgoing key \(for traversals from source\) and an incoming key \(for traversals to target\).
+PutEdge creates a directed edge between two existing nodes. Endpoint checks test key existence without copying or decoding node labels. Pathway uses multigraph semantics: every call creates a distinct edge, even when the endpoints and label match an existing edge. It performs a dual\-write, creating both an outgoing key \(for traversals from source\) and an incoming key \(for traversals to target\).
 
 Returns an error if either source or destination node does not exist.
 
@@ -925,7 +925,7 @@ err := tx.PutNode(id, "Person")
 ```
 
 <a name="Tx.ScanNodes"></a>
-### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L574>)
+### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L592>)
 
 ```go
 func (tx *Tx) ScanNodes() NodeIterator
@@ -943,7 +943,7 @@ func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
 Set sets the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.SetProperties"></a>
-### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L276>)
+### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L272>)
 
 ```go
 func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error

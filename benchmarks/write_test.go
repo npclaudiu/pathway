@@ -1,6 +1,7 @@
 package benchmarks
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -109,6 +110,32 @@ func BenchmarkInsertEdge(b *testing.B) {
 				})
 			})
 			if err != nil {
+				b.Fatalf("failed to insert edge: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkInsertEdgeLargeEndpointLabels(b *testing.B) {
+	RunWriteBenchmark(b, func(b *testing.B, db *pathway.Database) {
+		ctx := b.Context()
+		srcID, dstID := uuid.New(), uuid.New()
+		label := strings.Repeat("x", 65_535)
+		if err := db.BulkUpdate(ctx, func(writer *pathway.BulkWriter) error {
+			if err := writer.PutNode(srcID, label); err != nil {
+				return err
+			}
+			return writer.PutNode(dstID, label)
+		}); err != nil {
+			b.Fatalf("failed to create endpoints: %v", err)
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := db.Update(ctx, func(tx *pathway.Tx) error {
+				_, err := tx.PutEdge(srcID, dstID, "BENCH_EDGE")
+				return err
+			}); err != nil {
 				b.Fatalf("failed to insert edge: %v", err)
 			}
 		}
