@@ -7,8 +7,6 @@ It provides a fluid, Gremlin-like query interface for natural graph traversals.
 > **NOTE**: This is an experimental library in an early stage of development.
 > Use with caution.
 
-Developed using [Google Antigravity](https://antigravity.google/).
-
 ## Installation
 
 ```bash
@@ -26,7 +24,8 @@ go run github.com/cockroachdb/pebble/cmd/pebble@v1.1.5 db upgrade <db-dir>
 
 Pebble format upgrades are permanent, so back up the database first. On its
 first open, Pathway then atomically migrates the original unversioned Pathway
-keys to schema version 2. New and in-memory databases do not need the Pebble
+keys to schema version 3. Schema-v2 databases are also upgraded automatically.
+New and in-memory databases do not need the Pebble
 upgrade. A database written by a newer, unsupported Pathway schema is rejected
 with `ErrUnsupportedSchema`.
 
@@ -41,8 +40,8 @@ import (
 	"context"
 	"log"
 
- "github.com/google/uuid"
- "github.com/npclaudiu/pathway"
+	"github.com/google/uuid"
+	"github.com/npclaudiu/pathway"
 )
 
 func main() {
@@ -89,12 +88,31 @@ func main() {
 * **Edges**: Directed, labeled connections with UUIDs and optional properties.
   Pathway is a multigraph, so parallel edges are preserved as distinct records.
 * **Properties**: JSON-compatible key-value pairs attached to existing nodes or
-  edges. Node properties have exact, type-aware indexes.
+  edges. Selected node properties can have exact, type-aware indexes.
 * **Constraints**:
   * **Labels and indexed property names**: Maximum 65,535 UTF-8 bytes.
   * **IDs**: UUIDs only.
   * **Properties**: Standard JSON-compatible values; indexed strings, numbers,
     and booleans remain type-distinct.
+
+### Property indexes
+
+Configure indexes by node label and property when opening the database:
+
+```go
+db, err := pathway.OpenWithOptions("graph.db", pathway.Options{
+	Indexes: []pathway.IndexDefinition{
+		{Label: "User", Property: "name"},
+	},
+})
+```
+
+The configured slice is authoritative: Pathway atomically builds newly added
+indexes from existing nodes and drops removed indexes while opening. A `nil`
+slice, including the one used by `Open`, preserves definitions stored in an
+existing database and creates no indexes for a new database. Use a non-nil
+empty slice to remove all indexes. `FindNodes` only returns results for a
+configured label/property pair.
 
 ### Fluid Query Capabilities
 

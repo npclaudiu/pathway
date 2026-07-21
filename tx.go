@@ -1,6 +1,7 @@
 package pathway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 
@@ -130,8 +131,7 @@ func (tx *Tx) Close() error {
 }
 
 // PutNode creates or updates a node with the given label. Changing an existing
-// node's label migrates all of its property-index entries, so its cost is linear
-// in the number of properties on that node.
+// node's label migrates its configured property-index entries.
 //
 // Usage:
 //
@@ -151,24 +151,32 @@ func (tx *Tx) PutNode(id uuid.UUID, label string) error {
 		return err
 	}
 	if exists && oldLabel != label {
-		props, err := tx.GetProperties(id)
-		if err != nil {
-			return err
-		}
-		for propKey, propValue := range props {
-			oldIndexKey, err := encoding.EncodeIndexKey(oldLabel, propKey, propValue, id)
+		oldIndexes := tx.indexedProperties(oldLabel)
+		newIndexes := tx.indexedProperties(label)
+		if len(oldIndexes) != 0 || len(newIndexes) != 0 {
+			props, err := tx.GetProperties(id)
 			if err != nil {
 				return err
 			}
-			newIndexKey, err := encoding.EncodeIndexKey(label, propKey, propValue, id)
-			if err != nil {
-				return err
-			}
-			if err := tx.batch.Delete(oldIndexKey, nil); err != nil {
-				return err
-			}
-			if err := tx.batch.Set(newIndexKey, nil, nil); err != nil {
-				return err
+			for propKey, propValue := range props {
+				if _, indexed := oldIndexes[propKey]; indexed {
+					oldIndexKey, err := encoding.EncodeIndexKey(oldLabel, propKey, propValue, id)
+					if err != nil {
+						return err
+					}
+					if err := tx.batch.Delete(oldIndexKey, nil); err != nil {
+						return err
+					}
+				}
+				if _, indexed := newIndexes[propKey]; indexed {
+					newIndexKey, err := encoding.EncodeIndexKey(label, propKey, propValue, id)
+					if err != nil {
+						return err
+					}
+					if err := tx.batch.Set(newIndexKey, nil, nil); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
@@ -292,32 +300,42 @@ func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 		}
 	}
 
-	if isNode {
-		// Fetch old properties to delete from index
+	indexedProperties := tx.indexedProperties(lbl)
+	if isNode && len(indexedProperties) != 0 {
 		oldProps, err := tx.GetProperties(id)
 		if err != nil {
 			return err
 		}
 
-		// Delete old index entries
-		for k, v := range oldProps {
-			idxKey, err := encoding.EncodeIndexKey(lbl, k, v, id)
-			if err != nil {
-				return err
-			}
-			if err := tx.batch.Delete(idxKey, nil); err != nil {
-				return err
-			}
-		}
+		for property := range indexedProperties {
+			oldValue, hadOldValue := oldProps[property]
+			newValue, hasNewValue := canonicalProps[property]
 
-		// Add new index entries
-		for k, v := range canonicalProps {
-			idxKey, err := encoding.EncodeIndexKey(lbl, k, v, id)
-			if err != nil {
-				return err
+			var oldIndexKey, newIndexKey []byte
+			if hadOldValue {
+				oldIndexKey, err = encoding.EncodeIndexKey(lbl, property, oldValue, id)
+				if err != nil {
+					return err
+				}
 			}
-			if err := tx.batch.Set(idxKey, nil, nil); err != nil { // empty value for index
-				return err
+			if hasNewValue {
+				newIndexKey, err = encoding.EncodeIndexKey(lbl, property, newValue, id)
+				if err != nil {
+					return err
+				}
+			}
+			if hadOldValue && hasNewValue && bytes.Equal(oldIndexKey, newIndexKey) {
+				continue
+			}
+			if hadOldValue {
+				if err := tx.batch.Delete(oldIndexKey, nil); err != nil {
+					return err
+				}
+			}
+			if hasNewValue {
+				if err := tx.batch.Set(newIndexKey, nil, nil); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -342,18 +360,24 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error {
 	}
 
 	if isNode {
-		// Clean up index
-		oldProps, err := tx.GetProperties(id)
-		if err != nil {
-			return err
-		}
-		for k, v := range oldProps {
-			idxKey, err := encoding.EncodeIndexKey(lbl, k, v, id)
+		indexedProperties := tx.indexedProperties(lbl)
+		if len(indexedProperties) != 0 {
+			oldProps, err := tx.GetProperties(id)
 			if err != nil {
 				return err
 			}
-			if err := tx.batch.Delete(idxKey, nil); err != nil {
-				return err
+			for k := range indexedProperties {
+				v, exists := oldProps[k]
+				if !exists {
+					continue
+				}
+				idxKey, err := encoding.EncodeIndexKey(lbl, k, v, id)
+				if err != nil {
+					return err
+				}
+				if err := tx.batch.Delete(idxKey, nil); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -519,9 +543,11 @@ func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator {
 	return &edgeIterator{iter: iter, valid: iter.Valid(), first: true, labels: labels}
 }
 
-// FindNodes performs an exact typed lookup in the node-property index. String,
-// numeric, and boolean values are distinct; value prefixes do not match. The
-// iterator reports an encoding error if label or propKey exceeds 65,535 bytes.
+// FindNodes performs an exact typed lookup in a node-property index configured
+// through Options.Indexes. An unindexed label/property pair returns no results.
+// String, numeric, and boolean values are distinct; value prefixes do not
+// match. The iterator reports an encoding error if label or propKey exceeds
+// 65,535 bytes.
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator {
 	prefix, err := encoding.EncodeIndexPrefix(label, propKey, propValue)
 	if err != nil {

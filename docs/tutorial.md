@@ -24,8 +24,12 @@ import (
 )
 
 func main() {
-    // Open an in-memory database for this tutorial
-    db, err := pathway.Open(":memory:")
+    // Indexes are optional. Configure only properties used by FindNodes.
+    db, err := pathway.OpenWithOptions(":memory:", pathway.Options{
+        Indexes: []pathway.IndexDefinition{
+            {Label: "User", Property: "username"},
+        },
+    })
     if err != nil {
         log.Fatal(err)
     }
@@ -35,6 +39,12 @@ func main() {
     // ...
 }
 ```
+
+Index definitions are persisted. On a later open, `pathway.Open` preserves the
+stored definitions. Passing a non-nil `Options.Indexes` slice instead makes it
+the desired set: newly added indexes are rebuilt from existing nodes and
+removed indexes are dropped atomically. `FindNodes` returns no matches for an
+unindexed label/property pair.
 
 ## 2. Data Model
 

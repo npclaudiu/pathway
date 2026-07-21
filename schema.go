@@ -11,12 +11,12 @@ import (
 	"github.com/npclaudiu/pathway/internal/properties"
 )
 
-const currentSchemaVersion uint32 = 2
+const currentSchemaVersion uint32 = 3
 
 var schemaVersionKey = []byte("\x00pathway/schema-version")
 
-// ensureSchema initializes new databases and upgrades the original unversioned
-// format. The migration and version marker are committed in one atomic batch:
+// ensureSchema initializes new databases and upgrades supported older formats.
+// Each migration and its version marker are committed in one atomic batch:
 // an interruption therefore exposes either the complete old schema or the
 // complete new schema, making a retry safe.
 func ensureSchema(db *pebble.DB) error {
@@ -30,10 +30,14 @@ func ensureSchema(db *pebble.DB) error {
 			return fmt.Errorf("%w: malformed version marker", ErrUnsupportedSchema)
 		}
 		version := binary.BigEndian.Uint32(versionValue)
-		if version != currentSchemaVersion {
+		switch version {
+		case currentSchemaVersion:
+			return nil
+		case 2:
+			return migrateSchemaV2ToV3(db)
+		default:
 			return fmt.Errorf("%w: found version %d, supported version is %d", ErrUnsupportedSchema, version, currentSchemaVersion)
 		}
-		return nil
 	}
 	if !errors.Is(err, pebble.ErrNotFound) {
 		return err
@@ -46,7 +50,7 @@ func ensureSchema(db *pebble.DB) error {
 	if empty {
 		return writeSchemaVersion(db)
 	}
-	return migrateSchemaV1ToV2(db)
+	return migrateSchemaV1ToCurrent(db)
 }
 
 func databaseIsEmpty(db *pebble.DB) (bool, error) {
@@ -64,7 +68,7 @@ func writeSchemaVersion(db *pebble.DB) error {
 	return db.Set(schemaVersionKey, value, pebble.Sync)
 }
 
-func migrateSchemaV1ToV2(db *pebble.DB) error {
+func migrateSchemaV1ToCurrent(db *pebble.DB) error {
 	batch := db.NewBatch()
 	defer func() { _ = batch.Close() }()
 
@@ -180,6 +184,84 @@ func migrateSchemaV1ToV2(db *pebble.DB) error {
 				return err
 			}
 			if err := batch.Set(indexKey, nil, nil); err != nil {
+				_ = nodeIter.Close()
+				return err
+			}
+			definitionKey, err := encoding.EncodeIndexDefinitionKey(label, propKey)
+			if err != nil {
+				_ = nodeIter.Close()
+				return err
+			}
+			if err := batch.Set(definitionKey, nil, nil); err != nil {
+				_ = nodeIter.Close()
+				return err
+			}
+		}
+	}
+	if err := errors.Join(nodeIter.Error(), nodeIter.Close()); err != nil {
+		return err
+	}
+
+	versionValue := make([]byte, 4)
+	binary.BigEndian.PutUint32(versionValue, currentSchemaVersion)
+	if err := batch.Set(schemaVersionKey, versionValue, nil); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+// migrateSchemaV2ToV3 preserves v2's implicit "index every node property"
+// behavior by materializing a definition for every existing label/property
+// pair. Existing typed index entries do not need to be rewritten.
+func migrateSchemaV2ToV3(db *pebble.DB) error {
+	batch := db.NewBatch()
+	defer func() { _ = batch.Close() }()
+
+	nodeIter, err := db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte{encoding.PrefixNode},
+		UpperBound: []byte{encoding.PrefixEdgeOut},
+	})
+	if err != nil {
+		return err
+	}
+	for nodeIter.First(); nodeIter.Valid(); nodeIter.Next() {
+		if len(nodeIter.Key()) != 17 {
+			_ = nodeIter.Close()
+			return encoding.ErrInvalidKeyFormat
+		}
+		label, consumed := encoding.DecodeLabel(nodeIter.Value())
+		if consumed == 0 || consumed != len(nodeIter.Value()) {
+			_ = nodeIter.Close()
+			return encoding.ErrInvalidValueFormat
+		}
+		var nodeID uuid.UUID
+		copy(nodeID[:], nodeIter.Key()[1:])
+
+		propertyValue, closer, err := db.Get(encoding.EncodePropertyKey(nodeID))
+		if errors.Is(err, pebble.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			_ = nodeIter.Close()
+			return err
+		}
+		propertyData := append([]byte(nil), propertyValue...)
+		if err := closer.Close(); err != nil {
+			_ = nodeIter.Close()
+			return err
+		}
+		props, err := properties.UnmarshalProperties(propertyData)
+		if err != nil {
+			_ = nodeIter.Close()
+			return err
+		}
+		for propKey := range props {
+			definitionKey, err := encoding.EncodeIndexDefinitionKey(label, propKey)
+			if err != nil {
+				_ = nodeIter.Close()
+				return err
+			}
+			if err := batch.Set(definitionKey, nil, nil); err != nil {
 				_ = nodeIter.Close()
 				return err
 			}

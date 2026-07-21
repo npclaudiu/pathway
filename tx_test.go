@@ -387,7 +387,12 @@ func TestTx_DeleteEdge_CorruptReverseRecordAborts(t *testing.T) {
 }
 
 func TestTx_FindNodes(t *testing.T) {
-	db, _ := Open(":memory:")
+	db, err := OpenWithOptions(":memory:", Options{Indexes: []IndexDefinition{
+		{Label: "User", Property: "name"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer closeTestResource(t, db)
 	ctx := context.Background()
 
@@ -395,7 +400,7 @@ func TestTx_FindNodes(t *testing.T) {
 	id2 := uuid.New()
 
 	// Seed properties
-	err := db.Update(ctx, func(tx *Tx) error {
+	err = db.Update(ctx, func(tx *Tx) error {
 		if err := tx.PutNode(id1, "User"); err != nil {
 			return err
 		}
@@ -458,7 +463,9 @@ func TestTx_FindNodes(t *testing.T) {
 }
 
 func TestTx_FindNodes_UsesExactTypedValues(t *testing.T) {
-	db, err := Open(":memory:")
+	db, err := OpenWithOptions(":memory:", Options{Indexes: []IndexDefinition{
+		{Label: "Item", Property: "value"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +514,12 @@ func TestTx_FindNodes_UsesExactTypedValues(t *testing.T) {
 }
 
 func TestTx_PutNode_LabelChangeMigratesIndexes(t *testing.T) {
-	db, err := Open(":memory:")
+	db, err := OpenWithOptions(":memory:", Options{Indexes: []IndexDefinition{
+		{Label: "OldLabel", Property: "name"},
+		{Label: "OldLabel", Property: "rank"},
+		{Label: "NewLabel", Property: "name"},
+		{Label: "NewLabel", Property: "rank"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,6 +26,11 @@ lower-selectivity numeric hit. Traversal setup creates deterministic adjacency
 layers and validates the expected one-hop and two-hop cardinalities before
 starting the timer.
 
+The shared benchmark fixture explicitly configures `Person/name` and
+`Person/age` indexes. This keeps `BenchmarkFindNodes` an indexed lookup while
+write benchmarks include the maintenance cost only for those selected
+properties.
+
 For before/after comparisons, capture both revisions and use `benchstat`:
 
 ```bash

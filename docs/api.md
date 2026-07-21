@@ -19,6 +19,7 @@ import "github.com/npclaudiu/pathway"
   - [func \(d \*Database\) Update\(ctx context.Context, fn func\(tx \*Tx\) error\) error](<#Database.Update>)
   - [func \(d \*Database\) View\(ctx context.Context, fn func\(tx \*Tx\) error\) error](<#Database.View>)
 - [type EdgeIterator](<#EdgeIterator>)
+- [type IndexDefinition](<#IndexDefinition>)
 - [type Iterator](<#Iterator>)
 - [type Logger](<#Logger>)
 - [type NodeIterator](<#NodeIterator>)
@@ -91,7 +92,7 @@ var (
 ```
 
 <a name="Database"></a>
-## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L51-L55>)
+## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L64-L69>)
 
 Database represents a connection to the embedded graph database. It is safe for concurrent use by multiple goroutines.
 
@@ -102,7 +103,7 @@ type Database struct {
 ```
 
 <a name="Open"></a>
-### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L66>)
+### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L80>)
 
 ```go
 func Open(path string) (*Database, error)
@@ -121,16 +122,16 @@ db, err := pathway.Open(":memory:")
 ```
 
 <a name="OpenWithOptions"></a>
-### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L72>)
+### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L87>)
 
 ```go
 func OpenWithOptions(path string, opts Options) (*Database, error)
 ```
 
-OpenWithOptions opens the database with specific options. This allows configuration of logging, monitoring hooks, and underlying storage engine settings.
+OpenWithOptions opens the database with specific options. In addition to logging, monitoring hooks, and Pebble settings, options configure persisted exact\-match node\-property indexes.
 
 <a name="Database.Close"></a>
-### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L94>)
+### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L117>)
 
 ```go
 func (d *Database) Close() error
@@ -139,7 +140,7 @@ func (d *Database) Close() error
 Close closes the database connection and releases all resources. It is important to call Close\(\) to ensure all data is flushed to disk \(if persistent\) and locks are released.
 
 <a name="Database.Compact"></a>
-### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L169>)
+### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L192>)
 
 ```go
 func (g *Database) Compact(ctx context.Context) error
@@ -148,7 +149,7 @@ func (g *Database) Compact(ctx context.Context) error
 Compact triggers Pebble's manual compaction for the entire key range. It can be used to reclaim disk space after deleting a large number of nodes or edges. Note: This operation can be expensive and should typically not be run during high load.
 
 <a name="Database.NewReadTx"></a>
-### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L154>)
+### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L177>)
 
 ```go
 func (d *Database) NewReadTx(ctx context.Context) (*Tx, error)
@@ -166,7 +167,7 @@ func (g *Database) NewSnapshot(ctx context.Context) (*Snapshot, error)
 NewSnapshot creates a snapshot of the current database state. The snapshot is tied to the lifetime of the underlying Graph \(Database\) instance.
 
 <a name="Database.Update"></a>
-### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L106>)
+### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L129>)
 
 ```go
 func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error
@@ -183,7 +184,7 @@ err := db.Update(ctx, func(tx *pathway.Tx) error {
 ```
 
 <a name="Database.View"></a>
-### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L136>)
+### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L159>)
 
 ```go
 func (d *Database) View(ctx context.Context, fn func(tx *Tx) error) error
@@ -213,6 +214,18 @@ type EdgeIterator interface {
     // its label, and any decoding error. The other node is the target for an
     // outgoing iterator and the source for an incoming iterator.
     Edge() (uuid.UUID, uuid.UUID, string, error)
+}
+```
+
+<a name="IndexDefinition"></a>
+## type [IndexDefinition](<https://github.com/npclaudiu/pathway/blob/main/database.go#L24-L27>)
+
+IndexDefinition identifies one node label/property pair that should have an exact\-match property index.
+
+```go
+type IndexDefinition struct {
+    Label    string
+    Property string
 }
 ```
 
@@ -271,7 +284,7 @@ type NodeIterator interface {
 ```
 
 <a name="Options"></a>
-## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L31-L47>)
+## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L38-L60>)
 
 Options configuration for the database.
 
@@ -302,6 +315,12 @@ type Options struct {
     // PebbleOptions allows customizing the underlying storage engine (cockroachdb/pebble).
     // Use this to tune cache sizes, compaction settings, or file system options.
     PebbleOptions *pebble.Options
+
+    // Indexes is the desired set of node-property indexes. A nil slice preserves
+    // definitions already stored in an existing database (and creates none for a
+    // new database); a non-nil empty slice removes every index. Added indexes are
+    // built and removed indexes are dropped atomically while opening the database.
+    Indexes []IndexDefinition
 }
 ```
 
@@ -653,7 +672,7 @@ g.V().HasLabel("Person")...
 ```
 
 <a name="Tx"></a>
-## type [Tx](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L15-L23>)
+## type [Tx](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L16-L24>)
 
 Tx represents a database transaction. It can be either read\-only \(created via View\) or read\-write \(created via Update\).
 
@@ -664,7 +683,7 @@ type Tx struct {
 ```
 
 <a name="Tx.Access"></a>
-### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L113>)
+### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L114>)
 
 ```go
 func (tx *Tx) Access(fn func(tx *Tx) error) error
@@ -673,7 +692,7 @@ func (tx *Tx) Access(fn func(tx *Tx) error) error
 Access allows executing a function within the transaction context. Useful for executing multiple operations on the same transaction \(e.g. Iterators\).
 
 <a name="Tx.Close"></a>
-### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L121>)
+### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L122>)
 
 ```go
 func (tx *Tx) Close() error
@@ -682,7 +701,7 @@ func (tx *Tx) Close() error
 Close closes the transaction. This releases the underlying snapshot. For write transactions \(Update\), it's a no\-op as the batch is managed by the DB.Update method, but for read\-only \(View/NewReadTx\), it releases the read lease.
 
 <a name="Tx.Delete"></a>
-### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L104>)
+### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L105>)
 
 ```go
 func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
@@ -691,7 +710,7 @@ func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
 Delete deletes the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.DeleteEdge"></a>
-### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L398>)
+### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L422>)
 
 ```go
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
@@ -700,7 +719,7 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
 DeleteEdge removes a specific edge, including both adjacency records, its reverse\-index record, and its properties.
 
 <a name="Tx.DeleteNode"></a>
-### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L333>)
+### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L351>)
 
 ```go
 func (tx *Tx) DeleteNode(id uuid.UUID) error
@@ -709,16 +728,16 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error
 DeleteNode deletes a node and all its incident edges \(both outgoing and incoming\), including each edge's reverse\-index entry and properties. Its cost is linear in the node's degree.
 
 <a name="Tx.FindNodes"></a>
-### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L525>)
+### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L551>)
 
 ```go
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator
 ```
 
-FindNodes performs an exact typed lookup in the node\-property index. String, numeric, and boolean values are distinct; value prefixes do not match. The iterator reports an encoding error if label or propKey exceeds 65,535 bytes.
+FindNodes performs an exact typed lookup in a node\-property index configured through Options.Indexes. An unindexed label/property pair returns no results. String, numeric, and boolean values are distinct; value prefixes do not match. The iterator reports an encoding error if label or propKey exceeds 65,535 bytes.
 
 <a name="Tx.Get"></a>
-### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L65>)
+### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L66>)
 
 ```go
 func (tx *Tx) Get(key []byte) ([]byte, error)
@@ -727,7 +746,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error)
 Get retrieves the raw value for a given key. It handles the difference between read\-only readers and write batches.
 
 <a name="Tx.GetNode"></a>
-### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L442>)
+### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L466>)
 
 ```go
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
@@ -736,7 +755,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
 GetNode retrieves a node's label by its ID. Returns the label, a boolean indicating existence, and any error.
 
 <a name="Tx.GetProperties"></a>
-### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L458>)
+### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L482>)
 
 ```go
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
@@ -745,7 +764,7 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
 GetProperties retrieves the properties map for a given node or edge ID. Returns nil if no properties exist.
 
 <a name="Tx.InEdges"></a>
-### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L503>)
+### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L527>)
 
 ```go
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -763,7 +782,7 @@ func (tx *Tx) Load(id uuid.UUID, dest interface{}) error
 Load populates the destination struct with properties from the node/edge with the given ID. dest must be a pointer to a struct.
 
 <a name="Tx.NewIterator"></a>
-### func \(\*Tx\) [NewIterator](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L45>)
+### func \(\*Tx\) [NewIterator](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L46>)
 
 ```go
 func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
@@ -772,7 +791,7 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
 NewIterator creates a new low\-level iterator for the transaction. This is primarily for internal use; users should typically use high\-level iterators like ScanNodes, OutEdges, etc.
 
 <a name="Tx.OutEdges"></a>
-### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L478>)
+### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L502>)
 
 ```go
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -789,7 +808,7 @@ for iter.Next() { ... }
 ```
 
 <a name="Tx.PutEdge"></a>
-### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L196>)
+### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L204>)
 
 ```go
 func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error)
@@ -812,7 +831,7 @@ edgeID, err := tx.PutEdge(srcID, dstID, "KNOWS")
 func (tx *Tx) PutNode(id uuid.UUID, label string) error
 ```
 
-PutNode creates or updates a node with the given label. Changing an existing node's label migrates all of its property\-index entries, so its cost is linear in the number of properties on that node.
+PutNode creates or updates a node with the given label. Changing an existing node's label migrates its configured property\-index entries.
 
 Usage:
 
@@ -822,7 +841,7 @@ err := tx.PutNode(id, "Person")
 ```
 
 <a name="Tx.ScanNodes"></a>
-### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L546>)
+### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L572>)
 
 ```go
 func (tx *Tx) ScanNodes() NodeIterator
@@ -831,7 +850,7 @@ func (tx *Tx) ScanNodes() NodeIterator
 ScanNodes scans all nodes in the database. This is a full table scan and can be slow for large datasets.
 
 <a name="Tx.Set"></a>
-### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L95>)
+### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L96>)
 
 ```go
 func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
@@ -840,7 +859,7 @@ func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
 Set sets the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.SetProperties"></a>
-### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L266>)
+### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L274>)
 
 ```go
 func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error

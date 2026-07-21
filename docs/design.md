@@ -26,8 +26,8 @@ is designed around these choices:
 - Reads are exposed both as typed transaction operations and as lazy iterators.
 - The fluent traversal API builds a pipeline of iterator transformations and
   materializes it in a read snapshot at `ToList`.
-- Node-property indexes currently exist automatically for every property and
-  support exact typed equality only.
+- Node-property indexes are explicitly configured by label/property pair,
+  persisted in the store, and support exact typed equality only.
 
 Pathway is not a server, distributed database, query optimizer, schema/type
 system, or serializable transaction manager. It has no network protocol,
@@ -63,8 +63,9 @@ The main source files have intentionally coarse responsibilities:
 | File or package | Responsibility |
 |---|---|
 | `database.go` | Database lifecycle, options, managed read/write callbacks, compaction |
+| `indexes.go` | Persisted index-definition reconciliation, rebuilds, and runtime lookup cache |
 | `tx.go` | Transaction abstraction, graph mutation algorithms, point reads, scan construction |
-| `schema.go` | Pathway schema marker, initialization, and v1-to-v2 migration |
+| `schema.go` | Pathway schema marker, initialization, and supported migrations to v3 |
 | `internal/encoding` | Key prefixes, adjacency/reverse records, typed index encoding |
 | `internal/properties` | Protobuf conversion for dynamic property maps |
 | `internal/proto` | Generated property message; never edit generated Go manually |
@@ -81,8 +82,9 @@ The main source files have intentionally coarse responsibilities:
 
 A node consists of a caller-supplied UUID and a string label. `PutNode` is an
 upsert: the same UUID updates the existing node rather than returning a
-duplicate error. Labels may be changed. A label change rewrites every property
-index entry for that node in the same batch.
+duplicate error. Labels may be changed. A label change removes and creates the
+configured property-index entries needed by the old and new labels in the same
+batch.
 
 Labels are byte-length-prefixed with a `uint16`, so their encoded byte form may
 not exceed 65,535 bytes. Labels are intended to be UTF-8, but the encoder
@@ -122,21 +124,22 @@ Properties are a complete map associated with an existing node or edge.
 `SetProperties` replaces the whole map; it is not a patch operation. Unknown
 UUIDs return `ErrEntityNotFound` and do not create orphan records.
 
-Node properties are indexed; edge properties are not. Clearing properties
-removes the old node index entries and writes an empty property value. A missing
-property key and an empty decoded property map both currently surface as `nil`
-from `GetProperties`.
+Configured node properties are indexed; unconfigured node properties and all
+edge properties are not. Clearing properties removes configured node index
+entries and writes an empty property value. A missing property key and an empty
+decoded property map both currently surface as `nil` from `GetProperties`.
 
 ## Persistence architecture
 
 ### Ordered key families
 
 Every Pathway key begins with a one-byte record prefix. Nodes, outgoing edges,
-incoming edges, properties, indexes, and edge reverse records occupy separate
-contiguous ranges. Prefix scans use a lower bound equal to the desired prefix
-and `keyUpperBound(prefix)` as an exclusive upper bound.
+incoming edges, properties, indexes, edge reverse records, and persisted index
+definitions occupy separate contiguous ranges. Prefix scans use a lower bound
+equal to the desired prefix and `keyUpperBound(prefix)` as an exclusive upper
+bound.
 
-The exact schema-v2 layouts and type tags are documented in
+The exact schema-v3 layouts and type tags are documented in
 [storage-format.md](storage-format.md). Important architectural consequences
 are:
 
@@ -175,7 +178,7 @@ undeletable or unqueryable index records.
 
 ### Exact typed indexes
 
-Every node property currently creates an index key containing:
+Every configured node label/property pair creates index keys containing:
 
 ```text
 label | property name | value type | value length | value | node UUID
@@ -192,36 +195,49 @@ encoded for numeric sort order. Encoding failures are returned through the
 `NodeIterator.Error` channel because `FindNodes` itself does not return an
 error.
 
+Definitions use their own key family and are loaded into an immutable, nested
+map on `Database` after schema migration and option reconciliation. Transactions
+use that cache instead of reading definition records on every mutation.
+
 Indexes are denormalized state. Their correctness depends on all node mutation
 paths:
 
-- `SetProperties` deletes every old entry and inserts every new entry, even if
-  only one value changed.
-- `PutNode` migrates all entries when a label changes.
-- `DeleteNode` removes all entries before deleting the node.
-- Schema migration discards legacy indexes and rebuilds them from node
-  properties.
+- `SetProperties` considers configured properties only and skips entries whose
+  canonical encoded key is unchanged.
+- `PutNode` removes configured entries for the old label and adds configured
+  entries for the new label when a label changes.
+- `DeleteNode` removes configured entries before deleting the node.
+- Index reconciliation clears and rebuilds each newly configured range from
+  canonical node properties, or deletes the range for a removed definition.
+- Schema migration rebuilds legacy indexes or materializes definitions for
+  existing typed indexes, depending on the source version.
 
 ### Schema versioning and migration
 
-`OpenWithOptions` opens Pebble and immediately calls `ensureSchema` before
-returning a `Database`.
+`OpenWithOptions` opens Pebble, calls `ensureSchema`, reconciles persisted index
+definitions with `Options.Indexes`, and only then returns a `Database`.
 
 - An empty store receives the current four-byte schema marker with a synced
   write.
 - A store with the current marker opens normally.
-- A malformed, older explicitly versioned, or newer marker returns
-  `ErrUnsupportedSchema`.
+- Schema v2 is migrated to v3; a malformed or otherwise unsupported marker
+  returns `ErrUnsupportedSchema`.
 - Any non-empty store with no marker is treated as the original unversioned
-  schema (v1) and migrated to schema v2.
+  schema (v1) and migrated directly to schema v3.
 
-The v1-to-v2 migration treats legacy outgoing adjacency records as the source
+The v1-to-v3 migration treats legacy outgoing adjacency records as the source
 of truth. It deletes both legacy adjacency ranges, recreates outgoing and
 incoming records with edge IDs in their keys, creates reverse records, deletes
 all legacy property indexes, and rebuilds indexes from nodes and their property
-records. The data changes and new marker are committed in one synced Pebble
-batch, so interruption before commit leaves v1 and interruption after commit
-leaves v2.
+records. It also records a definition for every rebuilt label/property pair.
+The data changes and new marker are committed in one synced Pebble batch, so
+interruption before commit leaves v1 and interruption after commit leaves v3.
+
+The v2-to-v3 migration does not rewrite already typed index entries. It scans
+current nodes and persists a definition for each label/property pair it finds,
+preserving every index that can be inferred from current data. A caller can
+provide an authoritative desired `Options.Indexes` set on the same open; the
+subsequent reconciliation then adds or removes definitions atomically.
 
 This atomic approach is restart-safe but consumes batch memory proportional to
 the migrated graph. Large-database migration will eventually need a staged,
@@ -241,6 +257,16 @@ path to Pebble. `OpenWithOptions` uses the caller's `*pebble.Options` directly;
 for the in-memory special case it assigns the filesystem on that object. This
 means caller-owned options are currently mutable shared configuration rather
 than a cloned value.
+
+`Options.Indexes` has deliberately tri-state slice semantics. `nil` preserves
+the definitions already stored and creates none in a new database. A non-nil
+slice is the complete desired set; an empty one drops every index. Reconciliation
+uses one synced Pebble batch for all definition records and index data, so a
+failed or interrupted open cannot expose a partially changed configuration.
+Building each added definition scans nodes and reads matching-label property
+records. Removing one issues a range deletion over its exact label/property
+prefix. Index changes therefore require exclusive database open and may make
+startup expensive, but normal transactions never coordinate a mutable catalog.
 
 `Database` is safe for concurrent use to the extent provided by Pebble. The
 atomic transaction counter assigns internal IDs, but those IDs and the optional
@@ -302,12 +328,15 @@ used for ordinary application data.
 
 1. Validate the label byte length.
 2. Read the existing node through the transaction.
-3. If its label changes, load its properties and move every index entry from
-   the old label to the new label.
+3. If its label changes and either label has configured indexes, load its
+   properties, remove matching entries for the old label, and add matching
+   entries for the new label.
 4. Write the node record.
 
 The cost of creating a node is one existence read plus one write. Relabeling is
-linear in property count and adds two index writes per property.
+one node write when neither label has indexes. Otherwise it is linear in
+property count and adds writes only for properties configured on the relevant
+old or new label.
 
 ### `PutEdge`
 
@@ -323,12 +352,15 @@ properties, if any, require a separate `SetProperties` call in the same update.
 
 1. Serialize and canonicalize the complete new map.
 2. Resolve the UUID as a node first, then as an edge through the reverse index.
-3. For a node, load old properties and delete every old index entry.
-4. Insert every canonical new node index entry.
+3. For a node with configured indexes, load its old properties and encode the
+   old and new key for each configured property.
+4. Delete and insert only keys whose canonical encoded value changed; handle a
+   removed or newly present configured property with one delete or insert.
 5. Replace the property record.
 
-This is linear in old plus new property count and rewrites unchanged values.
-Only node properties incur index writes.
+Property serialization remains linear in the complete replacement map. Index
+maintenance is linear in the configured-property count, unchanged values cause
+no index writes, and a label with no indexes avoids the old-property read.
 
 ### `DeleteEdge`
 
@@ -342,7 +374,8 @@ reverse data aborts the update before any partial state is committed.
 
 ### `DeleteNode`
 
-1. Load the label and properties and remove node index entries.
+1. Load the label and, only when it has configured indexes, the properties;
+   remove matching node index entries.
 2. Scan both outgoing and incoming adjacency ranges.
 3. Decode and collect edge UUIDs before mutating either range.
 4. Deduplicate UUIDs so a self-loop, present in both scans, is deleted once.
@@ -568,8 +601,8 @@ The principal costs and write amplification are architectural, not incidental:
 | Operation | Dominant work |
 |---|---|
 | Create node | existence read, node write |
-| Relabel node | property read, two index writes per property, node write |
-| Set node properties | property read/decode, delete all old indexes, insert all new indexes, property encode/write |
+| Relabel node | node write; with relevant indexes, property read plus deletes/inserts for configured properties |
+| Set node properties | property encode/write; with indexes, old-property read/decode plus writes for changed configured values |
 | Create edge | two endpoint reads, three record writes |
 | Set edge properties | reverse-record existence read, property encode/write |
 | Delete edge | reverse point read, four deletes |
@@ -587,7 +620,6 @@ interpreting results.
 
 Likely optimization directions must preserve invariants:
 
-- explicit index definitions and incremental changed-property updates;
 - tighter adjacency bounds for label filters;
 - carrying neighbor labels or batching label reads to remove traversal N+1;
 - streaming terminal methods and caller contexts;
@@ -684,7 +716,6 @@ workload before the timed region and compare multiple runs with `benchstat`.
 `IMPROVEMENTS.md` is the tracked roadmap. The most consequential remaining
 design issues are:
 
-- automatic indexing and full index rewrites on every property replacement;
 - synchronous durability without a bulk/durability policy API;
 - traversal N+1 node and property reads;
 - mutable, dynamically typed pipelines and untyped normal node/edge results;

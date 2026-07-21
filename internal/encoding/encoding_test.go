@@ -272,3 +272,38 @@ func TestEncodeIndexPrefix_ValidatesLengths(t *testing.T) {
 		t.Fatalf("expected ErrInvalidIndexKey for property key, got %v", err)
 	}
 }
+
+func TestIndexDefinitionKey_Golden(t *testing.T) {
+	key, err := EncodeIndexDefinitionKey("Person", "name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{
+		PrefixIndexDef,
+		0, 6, 'P', 'e', 'r', 's', 'o', 'n',
+		0, 4, 'n', 'a', 'm', 'e',
+	}
+	if !bytes.Equal(key, want) {
+		t.Fatalf("definition key mismatch:\n got %x\nwant %x", key, want)
+	}
+	label, property, err := DecodeIndexDefinitionKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != "Person" || property != "name" {
+		t.Fatalf("decoded definition = (%q, %q)", label, property)
+	}
+}
+
+func TestDecodeIndexDefinitionKey_Invalid(t *testing.T) {
+	for _, key := range [][]byte{
+		nil,
+		{PrefixIndexDef},
+		{PrefixIndexDef, 0, 1, 'A', 0, 2, 'x'},
+		{PrefixNode, 0, 0, 0, 0},
+	} {
+		if _, _, err := DecodeIndexDefinitionKey(key); err != ErrInvalidKeyFormat {
+			t.Fatalf("DecodeIndexDefinitionKey(%x) error = %v", key, err)
+		}
+	}
+}

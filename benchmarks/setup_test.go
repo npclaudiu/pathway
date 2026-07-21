@@ -27,11 +27,15 @@ func removeBenchmarkDirectory(b testing.TB, path string) {
 // RunBenchmark executes a benchmark function against both Memory and Disk storage backends.
 func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 	b.Helper()
+	options := pathway.Options{Indexes: []pathway.IndexDefinition{
+		{Label: "Person", Property: "name"},
+		{Label: "Person", Property: "age"},
+	}}
 
 	// 1. In-Memory Benchmark
 	b.Run("Memory", func(b *testing.B) {
 		b.ReportAllocs()
-		db, err := pathway.Open(":memory:")
+		db, err := pathway.OpenWithOptions(":memory:", options)
 		if err != nil {
 			b.Fatalf("failed to open memory db: %v", err)
 		}
@@ -48,7 +52,7 @@ func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 		}
 		defer removeBenchmarkDirectory(b, dir)
 
-		db, err := pathway.Open(dir)
+		db, err := pathway.OpenWithOptions(dir, options)
 		if err != nil {
 			b.Fatalf("failed to open disk db: %v", err)
 		}

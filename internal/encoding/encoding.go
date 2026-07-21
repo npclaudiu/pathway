@@ -26,6 +26,7 @@ const (
 	PrefixProperties byte = 0x04
 	PrefixIndex      byte = 0x05
 	PrefixEdgeByID   byte = 0x06
+	PrefixIndexDef   byte = 0x07
 )
 
 // EncodeNodeKey returns the key for a node: [PrefixNode] + [NodeID]
@@ -173,10 +174,9 @@ const (
 // Format: [PrefixIndex] + [LabelLen:2] + [Label] + [KeyLen:2] + [Key] +
 // [ValueType:1] + [ValueLen:4] + [Value]
 func EncodeIndexPrefix(label, propKey string, propValue interface{}) ([]byte, error) {
-	lblBytes := []byte(label)
-	keyBytes := []byte(propKey)
-	if len(lblBytes) > math.MaxUint16 || len(keyBytes) > math.MaxUint16 {
-		return nil, ErrInvalidIndexKey
+	propertyPrefix, err := EncodeIndexPropertyPrefix(label, propKey)
+	if err != nil {
+		return nil, err
 	}
 
 	valueType, valBytes, err := encodeIndexValue(propValue)
@@ -187,7 +187,28 @@ func EncodeIndexPrefix(label, propKey string, propValue interface{}) ([]byte, er
 		return nil, ErrInvalidIndexValue
 	}
 
-	k := make([]byte, 1+2+len(lblBytes)+2+len(keyBytes)+1+4+len(valBytes))
+	k := make([]byte, len(propertyPrefix)+1+4+len(valBytes))
+	copy(k, propertyPrefix)
+	offset := len(propertyPrefix)
+	k[offset] = valueType
+	offset++
+	binary.BigEndian.PutUint32(k[offset:], uint32(len(valBytes)))
+	offset += 4
+	copy(k[offset:], valBytes)
+
+	return k, nil
+}
+
+// EncodeIndexPropertyPrefix creates the prefix shared by every indexed value
+// for one label/property pair.
+func EncodeIndexPropertyPrefix(label, propKey string) ([]byte, error) {
+	lblBytes := []byte(label)
+	keyBytes := []byte(propKey)
+	if len(lblBytes) > math.MaxUint16 || len(keyBytes) > math.MaxUint16 {
+		return nil, ErrInvalidIndexKey
+	}
+
+	k := make([]byte, 1+2+len(lblBytes)+2+len(keyBytes))
 	k[0] = PrefixIndex
 
 	offset := 1
@@ -199,15 +220,47 @@ func EncodeIndexPrefix(label, propKey string, propValue interface{}) ([]byte, er
 	binary.BigEndian.PutUint16(k[offset:], uint16(len(keyBytes)))
 	offset += 2
 	copy(k[offset:], keyBytes)
-	offset += len(keyBytes)
-
-	k[offset] = valueType
-	offset++
-	binary.BigEndian.PutUint32(k[offset:], uint32(len(valBytes)))
-	offset += 4
-	copy(k[offset:], valBytes)
 
 	return k, nil
+}
+
+// EncodeIndexDefinitionKey returns the persisted definition key for a
+// label/property pair.
+func EncodeIndexDefinitionKey(label, propKey string) ([]byte, error) {
+	lblBytes := []byte(label)
+	keyBytes := []byte(propKey)
+	if len(lblBytes) > math.MaxUint16 || len(keyBytes) > math.MaxUint16 {
+		return nil, ErrInvalidIndexKey
+	}
+
+	k := make([]byte, 1+2+len(lblBytes)+2+len(keyBytes))
+	k[0] = PrefixIndexDef
+	offset := 1
+	binary.BigEndian.PutUint16(k[offset:], uint16(len(lblBytes)))
+	offset += 2
+	copy(k[offset:], lblBytes)
+	offset += len(lblBytes)
+	binary.BigEndian.PutUint16(k[offset:], uint16(len(keyBytes)))
+	offset += 2
+	copy(k[offset:], keyBytes)
+	return k, nil
+}
+
+// DecodeIndexDefinitionKey decodes a persisted label/property definition.
+func DecodeIndexDefinitionKey(key []byte) (string, string, error) {
+	if len(key) < 5 || key[0] != PrefixIndexDef {
+		return "", "", ErrInvalidKeyFormat
+	}
+	label, consumed := DecodeLabel(key[1:])
+	if consumed == 0 {
+		return "", "", ErrInvalidKeyFormat
+	}
+	offset := 1 + consumed
+	propKey, consumed := DecodeLabel(key[offset:])
+	if consumed == 0 || offset+consumed != len(key) {
+		return "", "", ErrInvalidKeyFormat
+	}
+	return label, propKey, nil
 }
 
 // EncodeIndexKey creates a full index key for a specific node property.

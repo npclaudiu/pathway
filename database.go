@@ -19,6 +19,13 @@ type Logger interface {
 	Errorf(format string, args ...interface{})
 }
 
+// IndexDefinition identifies one node label/property pair that should have an
+// exact-match property index.
+type IndexDefinition struct {
+	Label    string
+	Property string
+}
+
 // Options configuration for the database.
 //
 // Example:
@@ -44,6 +51,12 @@ type Options struct {
 	// PebbleOptions allows customizing the underlying storage engine (cockroachdb/pebble).
 	// Use this to tune cache sizes, compaction settings, or file system options.
 	PebbleOptions *pebble.Options
+
+	// Indexes is the desired set of node-property indexes. A nil slice preserves
+	// definitions already stored in an existing database (and creates none for a
+	// new database); a non-nil empty slice removes every index. Added indexes are
+	// built and removed indexes are dropped atomically while opening the database.
+	Indexes []IndexDefinition
 }
 
 // Database represents a connection to the embedded graph database.
@@ -52,6 +65,7 @@ type Database struct {
 	db       *pebble.DB
 	nextTxID atomic.Uint64
 	options  Options
+	indexes  map[string]map[string]struct{}
 }
 
 // Open creates or opens a graph database at the given path with default options.
@@ -67,8 +81,9 @@ func Open(path string) (*Database, error) {
 	return OpenWithOptions(path, Options{})
 }
 
-// OpenWithOptions opens the database with specific options.
-// This allows configuration of logging, monitoring hooks, and underlying storage engine settings.
+// OpenWithOptions opens the database with specific options. In addition to
+// logging, monitoring hooks, and Pebble settings, options configure persisted
+// exact-match node-property indexes.
 func OpenWithOptions(path string, opts Options) (*Database, error) {
 	pOpts := opts.PebbleOptions
 	if pOpts == nil {
@@ -85,7 +100,15 @@ func OpenWithOptions(path string, opts Options) (*Database, error) {
 	if err := ensureSchema(db); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
-	return &Database{db: db, options: opts}, nil
+	definitions, err := reconcileIndexDefinitions(db, opts.Indexes)
+	if err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return &Database{
+		db:      db,
+		options: opts,
+		indexes: indexDefinitionMap(definitions),
+	}, nil
 }
 
 // Close closes the database connection and releases all resources.

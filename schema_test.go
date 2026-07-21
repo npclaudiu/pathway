@@ -137,6 +137,71 @@ func TestOpen_RejectsUnsupportedSchema(t *testing.T) {
 	}
 }
 
+func TestOpen_MigratesV2ImplicitIndexesToDefinitions(t *testing.T) {
+	dir := t.TempDir()
+	id := uuid.New()
+	rawDB, err := pebble.Open(dir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	propertyData, err := properties.MarshalProperties(map[string]interface{}{"name": "legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexKey, err := pathencoding.EncodeIndexKey("Person", "name", "legacy", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionValue := make([]byte, 4)
+	binary.BigEndian.PutUint32(versionValue, 2)
+	batch := rawDB.NewBatch()
+	for _, entry := range []struct {
+		key, value []byte
+	}{
+		{schemaVersionKey, versionValue},
+		{pathencoding.EncodeNodeKey(id), legacyNodeValue("Person")},
+		{pathencoding.EncodePropertyKey(id), propertyData},
+		{indexKey, nil},
+	} {
+		if err := batch.Set(entry.key, entry.value, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	assertIndexedNode(t, db, "Person", "name", "legacy", id)
+
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		return tx.SetProperties(id, map[string]interface{}{"name": "updated"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertIndexedNode(t, db, "Person", "name", "updated", id)
+	if err := db.View(context.Background(), func(tx *Tx) error {
+		iter := tx.FindNodes("Person", "name", "legacy")
+		defer closeTestResource(t, iter)
+		if iter.Next() {
+			t.Fatal("v2 index definition did not maintain an updated property")
+		}
+		return iter.Error()
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func legacyNodeValue(label string) []byte {
 	value := make([]byte, 2+len(label))
 	binary.BigEndian.PutUint16(value, uint16(len(label)))
