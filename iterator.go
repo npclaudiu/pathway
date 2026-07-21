@@ -53,6 +53,12 @@ type resultIterator interface {
 	Result() (interface{}, error)
 }
 
+// resultSizeHinter provides an upper bound for terminal preallocation. Most
+// traversal steps cannot know their output cardinality without executing.
+type resultSizeHinter interface {
+	ResultSizeHint() int
+}
+
 // nodeIDIterator is an internal optional capability for consuming a node ID
 // without forcing lazy iterators to load the node label.
 type nodeIDIterator interface {
@@ -503,6 +509,8 @@ func (it *fixedNodeIterator) Path() Path {
 	return Path{{Kind: PathNode, ID: it.curID, Label: it.curLbl}}
 }
 
+func (it *fixedNodeIterator) ResultSizeHint() int { return len(it.ids) }
+
 // flatMapEdgeIterator flattens streams of EdgeIterators
 type flatMapEdgeIterator struct {
 	tx      *Tx
@@ -664,6 +672,12 @@ func (it *filterIterator) Node() (uuid.UUID, string, error) {
 	return uuid.Nil, "", errors.New("not a node iterator")
 }
 func (it *filterIterator) NodeID() (uuid.UUID, error) { return currentNodeID(it.prev) }
+func (it *filterIterator) ResultSizeHint() int {
+	if hinted, ok := it.prev.(resultSizeHinter); ok {
+		return hinted.ResultSizeHint()
+	}
+	return 0
+}
 func (it *filterIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 	if ei, ok := it.prev.(EdgeIterator); ok {
 		return ei.Edge()
@@ -791,6 +805,12 @@ func (it *pathIterator) Error() error         { return it.prev.Error() }
 func (it *pathIterator) Valid() bool          { return it.prev.Valid() }
 func (it *pathIterator) SeekGE(k []byte) bool { return it.prev.SeekGE(k) }
 func (it *pathIterator) Path() Path           { return append(Path(nil), it.curPath...) }
+func (it *pathIterator) ResultSizeHint() int {
+	if hinted, ok := it.prev.(resultSizeHinter); ok {
+		return hinted.ResultSizeHint()
+	}
+	return 0
+}
 
 // repeatIterator implements BFS traversal
 type traverser struct {
@@ -1062,4 +1082,11 @@ func (it *idIterator) Error() error {
 		return it.err
 	}
 	return it.prev.Error()
+}
+
+func (it *idIterator) ResultSizeHint() int {
+	if hinted, ok := it.prev.(resultSizeHinter); ok {
+		return hinted.ResultSizeHint()
+	}
+	return 0
 }

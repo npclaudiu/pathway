@@ -13,6 +13,21 @@ import (
 type Traversal struct {
 }
 
+// Node is a materialized node returned by an unprojected traversal. Its fields
+// own their data and remain valid after the traversal transaction closes.
+type Node struct {
+	ID    uuid.UUID
+	Label string
+}
+
+// Edge is a materialized adjacency edge returned by an unprojected edge
+// traversal. Other is the endpoint relative to the traversal direction.
+type Edge struct {
+	ID    uuid.UUID
+	Other uuid.UUID
+	Label string
+}
+
 // PathElementKind identifies the graph element represented by a path entry.
 type PathElementKind string
 
@@ -275,8 +290,9 @@ func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
 
 // Terminal Steps
 
-// ToList executes the traversal pipeline and returns the results as a list.
-// This triggers the actual database transaction.
+// ToList executes the traversal pipeline and returns materialized results.
+// Unprojected nodes and edges are returned as Node and Edge values;
+// projections retain their documented result types.
 func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
 	if tp.db == nil {
 		return nil, ErrInvalidDatabase
@@ -319,6 +335,19 @@ func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
 	}
 	defer func() { err = errors.Join(err, iter.Close()) }()
 
+	resultCapacity := 16
+	if hinted, ok := iter.(resultSizeHinter); ok {
+		if hint := hinted.ResultSizeHint(); hint > 0 {
+			resultCapacity = hint
+		}
+	}
+	appendResult := func(value interface{}) {
+		if results == nil {
+			results = make([]interface{}, 0, resultCapacity)
+		}
+		results = append(results, value)
+	}
+
 	// 3. Drain Iterator
 	for iter.Next() {
 		// Extract value
@@ -328,23 +357,23 @@ func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
 				err = e
 				return nil, err
 			}
-			results = append(results, value)
+			appendResult(value)
 		} else if ni, ok := iter.(NodeIterator); ok {
 			id, lbl, e := ni.Node()
 			if e != nil {
 				err = e
 				return nil, err
 			}
-			results = append(results, map[string]interface{}{"id": id, "label": lbl, "type": "node"})
+			appendResult(Node{ID: id, Label: lbl})
 		} else if ei, ok := iter.(EdgeIterator); ok {
 			id, other, lbl, e := ei.Edge()
 			if e != nil {
 				err = e
 				return nil, err
 			}
-			results = append(results, map[string]interface{}{"id": id, "other": other, "label": lbl, "type": "edge"})
+			appendResult(Edge{ID: id, Other: other, Label: lbl})
 		} else {
-			results = append(results, iter.Key())
+			appendResult(append([]byte(nil), iter.Key()...))
 		}
 	}
 

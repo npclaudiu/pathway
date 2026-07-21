@@ -127,10 +127,64 @@ func TestQuery_HasLabel(t *testing.T) {
 	if len(res) != 1 {
 		t.Errorf("expected 1 robot, got %d", len(res))
 	}
-	if m, ok := res[0].(map[string]interface{}); ok {
-		if m["label"] != "Robot" {
-			t.Errorf("expected label Robot, got %v", m["label"])
+	node, ok := res[0].(Node)
+	if !ok {
+		t.Fatalf("result type = %T, want pathway.Node", res[0])
+	}
+	if node.ID != u2 || node.Label != "Robot" {
+		t.Errorf("result = %#v, want Robot node %s", node, u2)
+	}
+}
+
+func TestQuery_ToListReturnsOwnedTypedElements(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	ctx := context.Background()
+	source, target := uuid.New(), uuid.New()
+	var edgeID uuid.UUID
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(source, "Source"); err != nil {
+			return err
 		}
+		if err := tx.PutNode(target, "Target"); err != nil {
+			return err
+		}
+		edgeID, err = tx.PutEdge(source, target, "LINK")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	nodes, err := NewTraversalSource(db).V(source.String()).Out("LINK").ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Node{ID: target, Label: "Target"}); len(nodes) != 1 || nodes[0] != want {
+		t.Fatalf("nodes = %#v, want [%#v]", nodes, want)
+	}
+
+	edges, err := (&TraversalPipeline{
+		db: db,
+		steps: []Step{func(tx *Tx, _ Iterator) Iterator {
+			return tx.OutEdges(source, "LINK")
+		}},
+	}).ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Edge{ID: edgeID, Other: target, Label: "LINK"}); len(edges) != 1 || edges[0] != want {
+		t.Fatalf("edges = %#v, want [%#v]", edges, want)
+	}
+
+	if err := db.Update(ctx, func(tx *Tx) error { return tx.PutNode(target, "Renamed") }); err != nil {
+		t.Fatal(err)
+	}
+	if got := nodes[0].(Node).Label; got != "Target" {
+		t.Fatalf("materialized label changed after relabel: %q", got)
 	}
 }
 

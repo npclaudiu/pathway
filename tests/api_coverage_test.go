@@ -340,12 +340,12 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// Check result content
-		if m, ok := results[0].(map[string]interface{}); ok {
-			if id, ok := m["id"].(uuid.UUID); !ok || id != b {
-				t.Errorf("Expected node B, got %v", m)
+		if node, ok := results[0].(pathway.Node); ok {
+			if node.ID != b || node.Label != "B" {
+				t.Errorf("Expected node B, got %#v", node)
 			}
 		} else {
-			t.Errorf("Expected map result, got %T", results[0])
+			t.Errorf("Expected pathway.Node result, got %T", results[0])
 		}
 
 		// B. Filtering

@@ -146,9 +146,9 @@ the operations staged before it.
 
 ## 4. Querying
 
-Pathway provides a fluent traversal interface inspired by Gremlin. Node results
-are currently represented as `map[string]any`; ID, property, and path
-projections return UUIDs, scalars, and typed paths, respectively.
+Pathway provides a fluent traversal interface inspired by Gremlin. Normal node
+results are `pathway.Node` values; ID, property, and path projections return
+UUIDs, scalars, and typed paths, respectively.
 
 ### 4.1 Find Friends of Alice
 
@@ -163,10 +163,9 @@ func findFriends(db *pathway.Database, aliceID uuid.UUID) {
     }
 
     fmt.Printf("Alice follows %d people:\n", len(results))
-    for _, r := range results {
-        if m, ok := r.(map[string]any); ok {
-            fmt.Printf("- %v (Label: %s)\n", m["id"], m["label"])
-        }
+    for _, result := range results {
+        friend := result.(pathway.Node)
+        fmt.Printf("- %v (Label: %s)\n", friend.ID, friend.Label)
     }
 }
 ```

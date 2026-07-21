@@ -24,6 +24,9 @@ func BenchmarkTraverseOut(b *testing.B) {
 		if len(validation) != wantDegree {
 			b.Fatalf("expected out-degree %d, got %d", wantDegree, len(validation))
 		}
+		if _, ok := validation[0].(pathway.Node); !ok {
+			b.Fatalf("one-hop result type = %T, want pathway.Node", validation[0])
+		}
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -57,6 +60,9 @@ func BenchmarkBFS_2Hop(b *testing.B) {
 		}
 		if len(validation) != wantPaths {
 			b.Fatalf("expected %d two-hop paths, got %d", wantPaths, len(validation))
+		}
+		if _, ok := validation[0].(pathway.Node); !ok {
+			b.Fatalf("two-hop result type = %T, want pathway.Node", validation[0])
 		}
 
 		b.ResetTimer()

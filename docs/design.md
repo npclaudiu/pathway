@@ -551,7 +551,7 @@ pipeline type compatibility is enforced dynamically at iteration time.
    constant descriptor `"Traversal Query"`.
 3. Create one snapshot-backed read transaction.
 4. Apply step closures in order to form the final iterator stack.
-5. Drain it into `[]interface{}`.
+5. Drain it into `[]interface{}`, allocating the backing slice lazily.
 6. Close the iterator stack and transaction, joining close errors.
 7. Invoke the query-end hook with duration and the final error.
 
@@ -559,9 +559,16 @@ Terminal results depend on the final iterator:
 
 - projected `resultIterator` values, including UUIDs from `IDs`, are appended
   directly;
-- nodes become `map[string]any` with `id`, `label`, and `type`;
-- edges become `map[string]any` with `id`, `other`, `label`, and `type`;
-- an unknown generic iterator falls back to its raw key.
+- nodes become exported `Node` values containing UUID and label;
+- edges become exported `Edge` values containing edge UUID, relative endpoint,
+  and label;
+- an unknown generic iterator falls back to an owned copy of its raw key.
+
+The terminal uses an iterator cardinality hint when one is available. Otherwise
+it starts with capacity 16, which covers common shallow traversals without the
+repeated slice growth previously visible in allocation profiles. Empty results
+remain nil and do not allocate a result backing slice. Struct values and copied
+fallback keys remain valid after the snapshot and Pebble iterators close.
 
 There is no streaming terminal API; every result is held in memory. `ToList`
 does not accept or observe a caller context, and the contexts accepted by
@@ -684,7 +691,7 @@ The principal costs and write amplification are architectural, not incidental:
 | Label-bearing one-hop traversal | adjacency scan plus one lazy node point read per edge |
 | Label-filtered adjacency | one exact bounded scan per unique requested label |
 | `Values` | one property point read and full decode per entity |
-| `ToList` | snapshot lifecycle plus full result allocation |
+| `ToList` | snapshot lifecycle, one result slice, and typed value boxing |
 
 Write benchmarks exercise both synchronous and relaxed durability, with memory
 and disk backends under each mode. The benchmark harness seeds deterministic
@@ -703,16 +710,16 @@ Likely optimization directions must preserve invariants:
 
 ### Changing persistent storage
 
-1. Define the new byte layout and invariants first.
-2. Increment `currentSchemaVersion`.
-3. Add a deterministic migration from every supported prior version. Do not
-   silently reinterpret old bytes as the new format.
-4. Keep the marker update atomic with the migration or add explicit,
-   restart-safe checkpoints.
-5. Update mutation, deletion, migration, and iterator decoding together.
-6. Add golden encoding tests, representative on-disk migration tests,
-   corruption tests, and interrupted/repeated migration coverage.
-7. Update [storage-format.md](storage-format.md) and this document.
+Pathway currently has no compatibility clients. Until a compatibility promise
+is made, persistent layout changes may replace the development format directly
+without data or schema migrations. Define the new byte layout and invariants,
+update mutation/deletion/decoding together, adjust the current schema marker so
+old development stores are rejected rather than misread, and update golden
+encoding tests plus [storage-format.md](storage-format.md). Developers may
+recreate old stores.
+
+Before the first compatibility release, replace this policy with a versioned
+migration and fixture strategy.
 
 Never change a key prefix or field order as a local refactor. Pebble ordering is
 part of traversal bounds and therefore part of the persisted schema.
@@ -780,8 +787,8 @@ file. The tools have a separate module under `tools` so generator and linter
 dependencies do not enter the library's runtime dependency graph.
 
 For persistent changes, tests should cover the logical API, exact key format,
-absence of stale records, migration from a representative legacy database, and
-safe failure on malformed bytes. For performance changes, validate the intended
+absence of stale records, rejection of obsolete development formats, and safe
+failure on malformed bytes. For performance changes, validate the intended
 workload before the timed region and compare multiple runs with `benchstat`.
 
 ## Known architectural debt
@@ -790,13 +797,12 @@ workload before the timed region and compare multiple runs with `benchstat`.
 design issues are:
 
 - label-bearing and property projections still perform per-result point reads;
-- mutable, dynamically typed pipelines and untyped normal node/edge results;
+- mutable, dynamically typed pipelines and dynamically typed projections;
 - no context-aware or streaming terminal execution;
 - incomplete repeat validation, cycle policy, queue efficiency, and paths;
 - inconsistent iterator seek/valid and corruption semantics;
 - public exposure of Pebble types and mutable caller-owned Pebble options;
 - limited reflection loading and dynamically typed predicates;
-- migration batches that scale in memory with the database.
 
 These limitations are documented so maintainers do not accidentally treat them
 as intended long-term contracts. Changes should remain compatible where useful,

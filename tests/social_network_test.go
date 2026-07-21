@@ -179,10 +179,8 @@ func TestSocialNetworkQueries(t *testing.T) {
 		// Expect Bob and Charlie
 		found := make(map[uuid.UUID]bool)
 		for _, r := range results {
-			if m, ok := r.(map[string]interface{}); ok {
-				if id, ok := m["id"].(uuid.UUID); ok {
-					found[id] = true
-				}
+			if node, ok := r.(pathway.Node); ok {
+				found[node.ID] = true
 			}
 		}
 		if !found[users["Bob"]] || !found[users["Charlie"]] {
@@ -208,14 +206,12 @@ func TestSocialNetworkQueries(t *testing.T) {
 		// Verify we got Charlie and Dave
 		foundNames := 0
 		for _, r := range results {
-			if m, ok := r.(map[string]interface{}); ok {
-				if id, ok := m["id"].(uuid.UUID); ok {
-					switch id {
-					case users["Charlie"]:
-						foundNames++
-					case users["Dave"]:
-						foundNames++
-					}
+			if node, ok := r.(pathway.Node); ok {
+				switch node.ID {
+				case users["Charlie"]:
+					foundNames++
+				case users["Dave"]:
+					foundNames++
 				}
 			}
 		}
@@ -263,16 +259,12 @@ func TestSocialNetworkQueries(t *testing.T) {
 			t.Fatalf("Expected 1 liker, got %d", len(results))
 		}
 		// Expect Bob
-		if m, ok := results[0].(map[string]interface{}); ok {
-			if id, ok := m["id"].(uuid.UUID); ok {
-				if id != users["Bob"] {
-					t.Errorf("Expected Bob to like the post, got %v", id)
-				}
-			} else {
-				t.Errorf("Result ID not UUID: %v", results[0])
+		if node, ok := results[0].(pathway.Node); ok {
+			if node.ID != users["Bob"] {
+				t.Errorf("Expected Bob to like the post, got %v", node.ID)
 			}
 		} else {
-			t.Errorf("Result not a map: %v", results[0])
+			t.Errorf("Result is %T, want pathway.Node", results[0])
 		}
 	})
 }

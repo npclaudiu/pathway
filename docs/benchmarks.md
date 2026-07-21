@@ -26,6 +26,12 @@ lower-selectivity numeric hit. Traversal setup creates deterministic adjacency
 layers and validates the expected one-hop and two-hop cardinalities before
 starting the timer.
 
+`BenchmarkTraverseOut` and `BenchmarkBFS_2Hop` also track terminal
+materialization. Replacing per-result maps with typed values reduced the
+representative allocation counts on the Apple M2 Pro from 76 to 58 for one hop
+and from 136 to 105 for two hops. Compare repeated runs with `benchstat`; the
+counts include snapshot creation and the complete query lifecycle.
+
 `BenchmarkTraverseOutHighDegree` builds one node with 1,000 outgoing edges and
 compares `IDs` against normal label-bearing node materialization. The `IDs`
 case covers the adjacency-only neighbor path; the `Labels` case tracks the

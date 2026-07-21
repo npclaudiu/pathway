@@ -66,6 +66,14 @@ func run() error {
 		return err
 	}
 	fmt.Printf("Alice follows IDs: %v\n", ids)
+	nodes, err := g.V(alice.String()).Out("FOLLOWS").ToList()
+	if err != nil {
+		return err
+	}
+	for _, result := range nodes {
+		node := result.(pathway.Node)
+		fmt.Printf("Alice follows node: %s (%s)\n", node.ID, node.Label)
+	}
 
 	names, err := g.V(alice.String()).Out("FOLLOWS").Values("name").ToList()
 	if err != nil {
