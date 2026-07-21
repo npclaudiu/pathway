@@ -3,9 +3,12 @@ package pathway
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/google/uuid"
 	"github.com/npclaudiu/pathway/internal/encoding"
 )
@@ -61,16 +64,325 @@ func TestTx_PutEdge_Dangling(t *testing.T) {
 	}
 }
 
-func TestTx_DeleteEdge_NotImplemented(t *testing.T) {
-	db, _ := Open(":memory:")
+func TestTx_PutEdge_AllowsParallelEdges(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	ctx := context.Background()
+	src, dst := uuid.New(), uuid.New()
+	var firstID, secondID uuid.UUID
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(src, "Node"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(dst, "Node"); err != nil {
+			return err
+		}
+		if firstID, err = tx.PutEdge(src, dst, "LINK"); err != nil {
+			return err
+		}
+		secondID, err = tx.PutEdge(src, dst, "LINK")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if firstID == secondID {
+		t.Fatal("parallel edges received the same ID")
+	}
+
+	if err := db.View(ctx, func(tx *Tx) error {
+		iter := tx.OutEdges(src, "LINK")
+		defer closeTestResource(t, iter)
+
+		got := make(map[uuid.UUID]bool)
+		for iter.Next() {
+			edgeID, other, label, err := iter.Edge()
+			if err != nil {
+				return err
+			}
+			if other != dst || label != "LINK" {
+				t.Fatalf("unexpected parallel edge: other=%s label=%q", other, label)
+			}
+			got[edgeID] = true
+		}
+		if err := iter.Error(); err != nil {
+			return err
+		}
+		if !got[firstID] || !got[secondID] || len(got) != 2 {
+			t.Fatalf("expected both parallel edges, got %v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTx_DeleteEdge(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer closeTestResource(t, db)
 	ctx := context.Background()
+	src, dst := uuid.New(), uuid.New()
+	var edgeID uuid.UUID
 
-	err := db.Update(ctx, func(tx *Tx) error {
-		return tx.DeleteEdge(uuid.New())
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(src, "Node"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(dst, "Node"); err != nil {
+			return err
+		}
+		edgeID, err = tx.PutEdge(src, dst, "LINK")
+		if err != nil {
+			return err
+		}
+		return tx.SetProperties(edgeID, map[string]interface{}{"weight": 3})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		return tx.DeleteEdge(edgeID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.View(ctx, func(tx *Tx) error {
+		for name, iter := range map[string]EdgeIterator{
+			"outgoing": tx.OutEdges(src),
+			"incoming": tx.InEdges(dst),
+		} {
+			if iter.Next() {
+				t.Errorf("%s adjacency record still exists", name)
+			}
+			if err := iter.Error(); err != nil {
+				return err
+			}
+			if err := iter.Close(); err != nil {
+				return err
+			}
+		}
+		if props, err := tx.GetProperties(edgeID); err != nil {
+			return err
+		} else if props != nil {
+			t.Errorf("edge properties still exist: %v", props)
+		}
+		if _, err := tx.Get(encoding.EncodeEdgeIDKey(edgeID)); err == nil {
+			t.Error("edge reverse-index record still exists")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = db.Update(ctx, func(tx *Tx) error {
+		return tx.DeleteEdge(edgeID)
 	})
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Errorf("expected not supported error, got %v", err)
+	if !errors.Is(err, ErrEdgeNotFound) {
+		t.Errorf("expected ErrEdgeNotFound, got %v", err)
+	}
+}
+
+func TestTx_DeleteNode_RemovesAllIncidentEdgeRecords(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	ctx := context.Background()
+	victim, incomingSource, outgoingTarget := uuid.New(), uuid.New(), uuid.New()
+	edgeIDs := make([]uuid.UUID, 0, 68)
+	otherNodes := []uuid.UUID{incomingSource, outgoingTarget}
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		for _, id := range append([]uuid.UUID{victim}, otherNodes...) {
+			if err := tx.PutNode(id, "Node"); err != nil {
+				return err
+			}
+		}
+		for i := 0; i < 64; i++ {
+			id := uuid.New()
+			otherNodes = append(otherNodes, id)
+			if err := tx.PutNode(id, "Node"); err != nil {
+				return err
+			}
+		}
+
+		pairs := [][2]uuid.UUID{
+			{incomingSource, victim},
+			{victim, outgoingTarget},
+			{victim, victim},
+		}
+		for _, id := range otherNodes[2:] {
+			pairs = append(pairs, [2]uuid.UUID{victim, id})
+		}
+		for _, pair := range pairs {
+			edgeID, err := tx.PutEdge(pair[0], pair[1], "LINK")
+			if err != nil {
+				return err
+			}
+			edgeIDs = append(edgeIDs, edgeID)
+			if err := tx.SetProperties(edgeID, map[string]interface{}{"owned": true}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		return tx.DeleteNode(victim)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.View(ctx, func(tx *Tx) error {
+		if _, exists, err := tx.GetNode(victim); err != nil {
+			return err
+		} else if exists {
+			t.Error("deleted node still exists")
+		}
+		for _, edgeID := range edgeIDs {
+			if _, err := tx.Get(encoding.EncodeEdgeIDKey(edgeID)); !errors.Is(err, pebble.ErrNotFound) {
+				t.Errorf("reverse record %s still exists: %v", edgeID, err)
+			}
+			props, err := tx.GetProperties(edgeID)
+			if err != nil {
+				return err
+			}
+			if props != nil {
+				t.Errorf("properties for edge %s still exist", edgeID)
+			}
+		}
+		for _, id := range otherNodes {
+			if _, exists, err := tx.GetNode(id); err != nil {
+				return err
+			} else if !exists {
+				t.Errorf("non-deleted endpoint %s is missing", id)
+			}
+			for _, iter := range []EdgeIterator{tx.OutEdges(id), tx.InEdges(id)} {
+				if iter.Next() {
+					t.Errorf("incident adjacency remains for %s", id)
+				}
+				if err := iter.Error(); err != nil {
+					return err
+				}
+				if err := iter.Close(); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTx_SetProperties_RejectsUnknownEntity(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	ctx := context.Background()
+	unknownID := uuid.New()
+
+	err = db.Update(ctx, func(tx *Tx) error {
+		return tx.SetProperties(unknownID, map[string]interface{}{"orphaned": true})
+	})
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("expected ErrEntityNotFound, got %v", err)
+	}
+	if err := db.View(ctx, func(tx *Tx) error {
+		props, err := tx.GetProperties(unknownID)
+		if err != nil {
+			return err
+		}
+		if props != nil {
+			t.Fatalf("unknown entity received properties: %v", props)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTx_DeleteNode_CorruptAdjacencyAborts(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	ctx := context.Background()
+	id := uuid.New()
+	malformedKey := append([]byte{encoding.PrefixEdgeOut}, id[:]...)
+	malformedKey = append(malformedKey, 0, 0)
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(id, "Node"); err != nil {
+			return err
+		}
+		return tx.Set(malformedKey, make([]byte, 16), nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = db.Update(ctx, func(tx *Tx) error { return tx.DeleteNode(id) })
+	if !errors.Is(err, encoding.ErrInvalidKeyFormat) {
+		t.Fatalf("expected ErrInvalidKeyFormat, got %v", err)
+	}
+	if err := db.View(ctx, func(tx *Tx) error {
+		_, exists, err := tx.GetNode(id)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			t.Fatal("failed deletion was not rolled back")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTx_DeleteEdge_CorruptReverseRecordAborts(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	ctx := context.Background()
+	edgeID := uuid.New()
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.Set(encoding.EncodeEdgeIDKey(edgeID), []byte("invalid"), nil); err != nil {
+			return err
+		}
+		return tx.SetProperties(edgeID, map[string]interface{}{"preserved": true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = db.Update(ctx, func(tx *Tx) error { return tx.DeleteEdge(edgeID) })
+	if !errors.Is(err, encoding.ErrInvalidValueFormat) {
+		t.Fatalf("expected ErrInvalidValueFormat, got %v", err)
+	}
+	if err := db.View(ctx, func(tx *Tx) error {
+		props, err := tx.GetProperties(edgeID)
+		if err != nil {
+			return err
+		}
+		if props["preserved"] != true {
+			t.Fatalf("failed deletion removed edge properties: %v", props)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -141,6 +453,121 @@ func TestTx_FindNodes(t *testing.T) {
 		return nil
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTx_FindNodes_UsesExactTypedValues(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	ctx := context.Background()
+
+	values := []interface{}{"a", "ab", "1", 1, true}
+	ids := make([]uuid.UUID, len(values))
+	if err := db.Update(ctx, func(tx *Tx) error {
+		for i, value := range values {
+			ids[i] = uuid.New()
+			if err := tx.PutNode(ids[i], "Item"); err != nil {
+				return err
+			}
+			if err := tx.SetProperties(ids[i], map[string]interface{}{"value": value}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, value := range values {
+		if err := db.View(ctx, func(tx *Tx) error {
+			iter := tx.FindNodes("Item", "value", value)
+			defer closeTestResource(t, iter)
+			if !iter.Next() {
+				t.Fatalf("no result for %v (%T): %v", value, value, iter.Error())
+			}
+			id, _, err := iter.Node()
+			if err != nil {
+				return err
+			}
+			if id != ids[i] {
+				t.Fatalf("lookup for %v (%T) returned %s, want %s", value, value, id, ids[i])
+			}
+			if iter.Next() {
+				t.Fatalf("lookup for %v (%T) returned a prefix/type collision", value, value)
+			}
+			return iter.Error()
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestTx_PutNode_LabelChangeMigratesIndexes(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	ctx := context.Background()
+	id := uuid.New()
+
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(id, "OldLabel"); err != nil {
+			return err
+		}
+		return tx.SetProperties(id, map[string]interface{}{
+			"name": "indexed",
+			"rank": 7,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(ctx, func(tx *Tx) error {
+		return tx.PutNode(id, "NewLabel")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.View(ctx, func(tx *Tx) error {
+		for propKey, value := range map[string]interface{}{"name": "indexed", "rank": 7} {
+			oldIter := tx.FindNodes("OldLabel", propKey, value)
+			if oldIter.Next() {
+				t.Errorf("stale %q index remains under old label", propKey)
+			}
+			if err := oldIter.Error(); err != nil {
+				return err
+			}
+			if err := oldIter.Close(); err != nil {
+				return err
+			}
+
+			newIter := tx.FindNodes("NewLabel", propKey, value)
+			if !newIter.Next() {
+				return fmt.Errorf("missing %q index under new label: %v", propKey, newIter.Error())
+			}
+			gotID, gotLabel, err := newIter.Node()
+			if err != nil {
+				return err
+			}
+			if gotID != id || gotLabel != "NewLabel" {
+				t.Errorf("unexpected migrated index result: %s %q", gotID, gotLabel)
+			}
+			if newIter.Next() {
+				t.Errorf("duplicate migrated index for %q", propKey)
+			}
+			if err := newIter.Error(); err != nil {
+				return err
+			}
+			if err := newIter.Close(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

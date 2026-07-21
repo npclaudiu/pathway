@@ -47,25 +47,27 @@ func encodeNodeKey(id uuid.UUID) []byte {
 	return k
 }
 
-func encodeEdgeOutKey(srcID, dstID uuid.UUID, label string) []byte {
+func encodeEdgeOutKey(srcID, dstID, edgeID uuid.UUID, label string) []byte {
 	lblBytes := []byte(label)
-	k := make([]byte, 1+16+2+len(lblBytes)+16)
+	k := make([]byte, 1+16+2+len(lblBytes)+16+16)
 	k[0] = PrefixEdgeOut
 	copy(k[1:], srcID[:])
 	binary.BigEndian.PutUint16(k[17:], uint16(len(lblBytes)))
 	copy(k[19:], lblBytes)
 	copy(k[19+len(lblBytes):], dstID[:])
+	copy(k[19+len(lblBytes)+16:], edgeID[:])
 	return k
 }
 
-func encodeEdgeInKey(srcID, dstID uuid.UUID, label string) []byte {
+func encodeEdgeInKey(srcID, dstID, edgeID uuid.UUID, label string) []byte {
 	lblBytes := []byte(label)
-	k := make([]byte, 1+16+2+len(lblBytes)+16)
+	k := make([]byte, 1+16+2+len(lblBytes)+16+16)
 	k[0] = PrefixEdgeIn
 	copy(k[1:], dstID[:]) // Target first for In
 	binary.BigEndian.PutUint16(k[17:], uint16(len(lblBytes)))
 	copy(k[19:], lblBytes)
 	copy(k[19+len(lblBytes):], srcID[:])
+	copy(k[19+len(lblBytes)+16:], edgeID[:])
 	return k
 }
 
@@ -200,8 +202,8 @@ func TestAPICoverage(t *testing.T) {
 		// B. Storage Verification
 		err = db.View(ctx, func(tx *pathway.Tx) error {
 			return tx.Access(func(tx *pathway.Tx) error {
-				outK := encodeEdgeOutKey(u1, u2, "KNOWS")
-				inK := encodeEdgeInKey(u1, u2, "KNOWS")
+				outK := encodeEdgeOutKey(u1, u2, edgeID, "KNOWS")
+				inK := encodeEdgeInKey(u1, u2, edgeID, "KNOWS")
 
 				if _, err := tx.Get(outK); err != nil {
 					t.Errorf("Storage: OutEdge key missing")
@@ -246,7 +248,7 @@ func TestAPICoverage(t *testing.T) {
 		// Verify Edge Removed
 		err = db.View(ctx, func(tx *pathway.Tx) error {
 			return tx.Access(func(tx *pathway.Tx) error {
-				outK := encodeEdgeOutKey(u1, u2, "KNOWS")
+				outK := encodeEdgeOutKey(u1, u2, edgeID, "KNOWS")
 				if _, err := tx.Get(outK); err == nil {
 					t.Error("Storage: OutEdge key should be deleted")
 				}

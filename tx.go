@@ -3,7 +3,6 @@ package pathway
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/google/uuid"
@@ -19,6 +18,7 @@ type Tx struct {
 	batch    *pebble.Batch // For write transactions
 	reader   pebble.Reader // For read transactions
 	readOnly bool
+	closed   bool
 	id       uint64
 }
 
@@ -35,7 +35,7 @@ func (p *pebbleIterator) Value() []byte {
 	return p.Iterator.Value()
 }
 
-func (p *pebbleIterator) Path() []interface{} {
+func (p *pebbleIterator) Path() Path {
 	return nil // Base iterator has no path history
 }
 
@@ -43,6 +43,9 @@ func (p *pebbleIterator) Path() []interface{} {
 // This is primarily for internal use; users should typically use high-level iterators
 // like ScanNodes, OutEdges, etc.
 func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error) {
+	if tx.closed {
+		return nil, pebble.ErrClosed
+	}
 	var iter *pebble.Iterator
 	var err error
 
@@ -117,12 +120,18 @@ func (tx *Tx) Access(fn func(tx *Tx) error) error {
 // it releases the read lease.
 func (tx *Tx) Close() error {
 	if tx.readOnly && tx.reader != nil {
+		if tx.closed {
+			return nil
+		}
+		tx.closed = true
 		return tx.reader.Close()
 	}
 	return nil
 }
 
-// PutNode creates or updates a node with the given label.
+// PutNode creates or updates a node with the given label. Changing an existing
+// node's label migrates all of its property-index entries, so its cost is linear
+// in the number of properties on that node.
 //
 // Usage:
 //
@@ -132,25 +141,40 @@ func (tx *Tx) PutNode(id uuid.UUID, label string) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
 	}
-	// TODO: Validate label length
-	key := encoding.EncodeNodeKey(id)
-	// Value: [LabelLen][Label]
 	lblBytes := []byte(label)
-	// Simplify: store simplified label
-	// In real implementation we encode with length prefix
-	// For now, let's stick to the Spec encoding details implemented in other helpers if needed,
-	// but here we construct value manually or via helper.
-	// The spec 3.2 says Value: LabelID (var length). Let's respect label encoding.
-	val := make([]byte, 2+len(lblBytes))
-	// We can assume label len fits in uint16 for now or use binary helper
-	// For simplicity of this step, let's just write raw bytes or a helper.
-	// Spec 3.6 Label Encoding: [length:2 bytes][utf8 bytes]
-
-	// We really should expose a EncodeLabel helper but let's inline for now to save a file:
-	// Or assume EncodeNodeKey handles key, we handle value.
 	if len(lblBytes) > 65535 {
 		return encoding.ErrInvalidLabel
 	}
+
+	oldLabel, exists, err := tx.GetNode(id)
+	if err != nil {
+		return err
+	}
+	if exists && oldLabel != label {
+		props, err := tx.GetProperties(id)
+		if err != nil {
+			return err
+		}
+		for propKey, propValue := range props {
+			oldIndexKey, err := encoding.EncodeIndexKey(oldLabel, propKey, propValue, id)
+			if err != nil {
+				return err
+			}
+			newIndexKey, err := encoding.EncodeIndexKey(label, propKey, propValue, id)
+			if err != nil {
+				return err
+			}
+			if err := tx.batch.Delete(oldIndexKey, nil); err != nil {
+				return err
+			}
+			if err := tx.batch.Set(newIndexKey, nil, nil); err != nil {
+				return err
+			}
+		}
+	}
+
+	key := encoding.EncodeNodeKey(id)
+	val := make([]byte, 2+len(lblBytes))
 	val[0] = byte(len(lblBytes) >> 8)
 	val[1] = byte(len(lblBytes))
 	copy(val[2:], lblBytes)
@@ -158,7 +182,9 @@ func (tx *Tx) PutNode(id uuid.UUID, label string) error {
 	return tx.batch.Set(key, val, nil)
 }
 
-// PutEdge creates a directed edge between two nodes.
+// PutEdge creates a directed edge between two nodes. Pathway uses multigraph
+// semantics: every call creates a distinct edge, even when the endpoints and
+// label match an existing edge.
 // It performs a dual-write, creating both an outgoing key (for traversals from source)
 // and an incoming key (for traversals to target).
 //
@@ -197,17 +223,21 @@ func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 	edgeID := uuid.New()
 
 	// 3. Encoder keys
-	outKey, err := encoding.EncodeEdgeOutKey(srcID, dstID, label)
+	outKey, err := encoding.EncodeEdgeOutKey(srcID, dstID, edgeID, label)
 	if err != nil {
 		return uuid.Nil, err
 	}
 
-	inKey, err := encoding.EncodeEdgeInKey(srcID, dstID, label)
+	inKey, err := encoding.EncodeEdgeInKey(srcID, dstID, edgeID, label)
 	if err != nil {
 		return uuid.Nil, err
 	}
 
 	val := encoding.EncodeEdgeValue(edgeID)
+	edgeRecord, err := encoding.EncodeEdgeRecord(srcID, dstID, label)
+	if err != nil {
+		return uuid.Nil, err
+	}
 
 	// 4. Write to Batch
 	if err := tx.batch.Set(outKey, val, nil); err != nil {
@@ -216,12 +246,16 @@ func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 	if err := tx.batch.Set(inKey, val, nil); err != nil {
 		return uuid.Nil, err
 	}
+	if err := tx.batch.Set(encoding.EncodeEdgeIDKey(edgeID), edgeRecord, nil); err != nil {
+		return uuid.Nil, err
+	}
 
 	return edgeID, nil
 }
 
-// SetProperties sets a map of properties for a given node or edge.
-// This completely replaces any existing properties for that entity.
+// SetProperties sets a map of properties for an existing node or edge. This
+// completely replaces any existing properties for that entity. It returns
+// ErrEntityNotFound if id identifies neither kind of entity.
 //
 // Usage:
 //
@@ -234,10 +268,28 @@ func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 		return pebble.ErrReadOnly
 	}
 
+	// Marshal first, then index the canonical representation returned by the
+	// property codec. This keeps numeric index entries stable across updates.
+	data, err := properties.MarshalProperties(props)
+	if err != nil {
+		return err
+	}
+	canonicalProps, err := properties.UnmarshalProperties(data)
+	if err != nil {
+		return err
+	}
+
 	// 1. Maintain Index (only for Nodes)
 	lbl, isNode, err := tx.GetNode(id)
 	if err != nil {
 		return err
+	}
+	if !isNode {
+		if _, err := tx.Get(encoding.EncodeEdgeIDKey(id)); errors.Is(err, pebble.ErrNotFound) {
+			return ErrEntityNotFound
+		} else if err != nil {
+			return err
+		}
 	}
 
 	if isNode {
@@ -249,17 +301,21 @@ func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 
 		// Delete old index entries
 		for k, v := range oldProps {
-			valStr := fmt.Sprintf("%v", v)
-			idxKey := encoding.EncodeIndexKey(lbl, k, valStr, id)
+			idxKey, err := encoding.EncodeIndexKey(lbl, k, v, id)
+			if err != nil {
+				return err
+			}
 			if err := tx.batch.Delete(idxKey, nil); err != nil {
 				return err
 			}
 		}
 
 		// Add new index entries
-		for k, v := range props {
-			valStr := fmt.Sprintf("%v", v)
-			idxKey := encoding.EncodeIndexKey(lbl, k, valStr, id)
+		for k, v := range canonicalProps {
+			idxKey, err := encoding.EncodeIndexKey(lbl, k, v, id)
+			if err != nil {
+				return err
+			}
 			if err := tx.batch.Set(idxKey, nil, nil); err != nil { // empty value for index
 				return err
 			}
@@ -267,19 +323,13 @@ func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error {
 	}
 
 	// 2. Set actual properties
-	data, err := properties.MarshalProperties(props)
-	if err != nil {
-		return err
-	}
-
 	key := encoding.EncodePropertyKey(id)
 	return tx.batch.Set(key, data, nil)
 }
 
-// DeleteNode deletes a node and all its incident edges (both outgoing and incoming).
-// This ensures graph consistency so no dangling edges remain.
-// Note: This operation can be expensive for highly connected nodes as it requires
-// scanning and deleting all edges.
+// DeleteNode deletes a node and all its incident edges (both outgoing and
+// incoming), including each edge's reverse-index entry and properties. Its cost
+// is linear in the node's degree.
 func (tx *Tx) DeleteNode(id uuid.UUID) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
@@ -298,85 +348,91 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error {
 			return err
 		}
 		for k, v := range oldProps {
-			valStr := fmt.Sprintf("%v", v)
-			idxKey := encoding.EncodeIndexKey(lbl, k, valStr, id)
+			idxKey, err := encoding.EncodeIndexKey(lbl, k, v, id)
+			if err != nil {
+				return err
+			}
 			if err := tx.batch.Delete(idxKey, nil); err != nil {
 				return err
 			}
 		}
 	}
 
-	// 1. Delete Node Key
-	key := encoding.EncodeNodeKey(id)
-	if err := tx.batch.Delete(key, nil); err != nil {
+	// Collect before mutating the adjacency ranges. Self-loops appear in both
+	// scans, so the map also prevents a duplicate DeleteEdge call.
+	edgeIDs := make(map[uuid.UUID]struct{})
+	collect := func(iter EdgeIterator) (resultErr error) {
+		defer func() {
+			resultErr = errors.Join(resultErr, iter.Close())
+		}()
+		for iter.Next() {
+			edgeID, _, _, err := iter.Edge()
+			if err != nil {
+				return err
+			}
+			edgeIDs[edgeID] = struct{}{}
+		}
+		return iter.Error()
+	}
+	if err := collect(tx.OutEdges(id)); err != nil {
+		return err
+	}
+	if err := collect(tx.InEdges(id)); err != nil {
 		return err
 	}
 
-	// 2. Delete Incident Edges
-	// We need to iterate over all Out edges and In edges to find and delete them.
-	// This is expensive but necessary for consistency.
-	// IMPLEMENTATION:
-	// Iterate Out edges (0x02 + id)
-	// For each edge:
-	//    Delete OutKey (current key)
-	//    Construct InKey (0x03 + target + label + source) and delete it
-
-	// Outgoing
-	iterOut := tx.OutEdges(id) // This uses the Tx's reader (batch+db)
-	defer func() { _ = iterOut.Close() }()
-	for iterOut.Next() {
-		_, target, label, _ := iterOut.Edge() // ignoring error for brevity in plan, but should handle
-
-		// Delete Out Key (we can reconstruct or use Iter key if safe? Safest to reconstruct)
-		outK, _ := encoding.EncodeEdgeOutKey(id, target, label)
-		if err := tx.batch.Delete(outK, nil); err != nil {
-			return err
-		}
-
-		inK, _ := encoding.EncodeEdgeInKey(id, target, label)
-		if err := tx.batch.Delete(inK, nil); err != nil {
+	for edgeID := range edgeIDs {
+		if err := tx.DeleteEdge(edgeID); err != nil {
 			return err
 		}
 	}
 
-	// Incoming
-	iterIn := tx.InEdges(id)
-	defer func() { _ = iterIn.Close() }()
-	for iterIn.Next() {
-		_, source, label, _ := iterIn.Edge() // note: Edge() signature returns target for Out, source for In?
-		// Our iterator wrapper unifies this, but EdgeIterator.Edge() returns (edgeID, otherNodeID, label).
-		// So for InEdges, otherNodeID is Source.
-
-		inK, _ := encoding.EncodeEdgeInKey(source, id, label)
-		if err := tx.batch.Delete(inK, nil); err != nil {
-			return err
-		}
-
-		outK, _ := encoding.EncodeEdgeOutKey(source, id, label)
-		if err := tx.batch.Delete(outK, nil); err != nil {
-			return err
-		}
+	if err := tx.batch.Delete(encoding.EncodeNodeKey(id), nil); err != nil {
+		return err
 	}
-
-	// 3. Delete Properties
-	propKey := encoding.EncodePropertyKey(id)
-	return tx.batch.Delete(propKey, nil)
+	return tx.batch.Delete(encoding.EncodePropertyKey(id), nil)
 }
 
-// DeleteEdge removes a specific edge.
-// Note: Currently, deleting by EdgeID alone is not fully supported efficiently without an index.
-// Use DeleteEdgeBetween(src, dst, label) if available (planned for future).
-//
-// Deprecated: Use DeleteNode or specific edge removal logic when API expands.
+// DeleteEdge removes a specific edge, including both adjacency records, its
+// reverse-index record, and its properties.
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error {
-	// This is tricky because the Key-Value mapping is:
-	// Key -> EdgeID.
-	// To delete by EdgeID, we need a reverse index (EdgeID -> Keys) OR scan all edges.
-	// The current spec doesn't mandate an EdgeID index.
-	// Optimally, user should provide (Src, Dst, Label) to delete.
-	// If we strictly need DeleteEdge(uuid), we must add an index or scan.
-	// Strategy: For Phase 1, we return "Not Implemented" or scan (very slow).
-	return errors.New("delete by ID not supported without index; use DeleteEdgeBetween(src, dst, label)")
+	if tx.readOnly {
+		return pebble.ErrReadOnly
+	}
+
+	reverseKey := encoding.EncodeEdgeIDKey(edgeID)
+	record, err := tx.Get(reverseKey)
+	if err == pebble.ErrNotFound {
+		return ErrEdgeNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	srcID, dstID, label, err := encoding.DecodeEdgeRecord(record)
+	if err != nil {
+		return err
+	}
+	outKey, err := encoding.EncodeEdgeOutKey(srcID, dstID, edgeID, label)
+	if err != nil {
+		return err
+	}
+	inKey, err := encoding.EncodeEdgeInKey(srcID, dstID, edgeID, label)
+	if err != nil {
+		return err
+	}
+
+	for _, key := range [][]byte{
+		outKey,
+		inKey,
+		reverseKey,
+		encoding.EncodePropertyKey(edgeID),
+	} {
+		if err := tx.batch.Delete(key, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // READ OPERATIONS
@@ -432,7 +488,7 @@ func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator {
 
 	iter, err := tx.NewIterator(opts)
 	if err != nil {
-		return &edgeIterator{err: err}
+		return &edgeIterator{iter: newErrorIterator(err), err: err}
 	}
 
 	// Seek to first key
@@ -456,16 +512,21 @@ func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator {
 
 	iter, err := tx.NewIterator(opts)
 	if err != nil {
-		return &edgeIterator{err: err}
+		return &edgeIterator{iter: newErrorIterator(err), err: err}
 	}
 	iter.SeekGE(prefix)
 
 	return &edgeIterator{iter: iter, valid: iter.Valid(), first: true, labels: labels}
 }
 
-// FindNodes scans the index.
-func (tx *Tx) FindNodes(label, propKey, propValue string) NodeIterator {
-	prefix := encoding.EncodeIndexPrefix(label, propKey, propValue)
+// FindNodes performs an exact typed lookup in the node-property index. String,
+// numeric, and boolean values are distinct; value prefixes do not match. The
+// iterator reports an encoding error if label or propKey exceeds 65,535 bytes.
+func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator {
+	prefix, err := encoding.EncodeIndexPrefix(label, propKey, propValue)
+	if err != nil {
+		return &nodeIndexIterator{iter: newErrorIterator(err), err: err}
+	}
 	opts := &pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: keyUpperBound(prefix),
@@ -473,7 +534,7 @@ func (tx *Tx) FindNodes(label, propKey, propValue string) NodeIterator {
 
 	iter, err := tx.NewIterator(opts)
 	if err != nil {
-		return &nodeIndexIterator{err: err}
+		return &nodeIndexIterator{iter: newErrorIterator(err), err: err}
 	}
 
 	iter.SeekGE(prefix)
@@ -491,7 +552,7 @@ func (tx *Tx) ScanNodes() NodeIterator {
 
 	iter, err := tx.NewIterator(opts)
 	if err != nil {
-		return &nodeIterator{err: err}
+		return &nodeIterator{iter: newErrorIterator(err), err: err}
 	}
 
 	iter.SeekGE(prefix)

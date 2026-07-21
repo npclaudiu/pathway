@@ -27,13 +27,15 @@ type Iterator interface {
 	Error() error
 
 	// Path returns the current path history for the element.
-	Path() []interface{}
+	Path() Path
 }
 
 // EdgeIterator iterates over edges returning typed data.
 type EdgeIterator interface {
 	Iterator // Embed generic iterator
-	// Edge returns: EdgeID, TargetNodeID, Label, Error
+	// Edge returns the edge ID, the node at the other end of the adjacency,
+	// its label, and any decoding error. The other node is the target for an
+	// outgoing iterator and the source for an incoming iterator.
 	Edge() (uuid.UUID, uuid.UUID, string, error)
 }
 
@@ -43,6 +45,29 @@ type NodeIterator interface {
 	// Node returns the ID and Label of the current node.
 	Node() (uuid.UUID, string, error)
 }
+
+// resultIterator is implemented by query steps that project a materialized
+// value rather than a graph element.
+type resultIterator interface {
+	Iterator
+	Result() (interface{}, error)
+}
+
+// errorIterator preserves an iterator-construction error while providing a
+// safe, inert implementation of every Iterator method.
+type errorIterator struct {
+	err error
+}
+
+func newErrorIterator(err error) *errorIterator { return &errorIterator{err: err} }
+func (it *errorIterator) Next() bool            { return false }
+func (it *errorIterator) SeekGE([]byte) bool    { return false }
+func (it *errorIterator) Key() []byte           { return nil }
+func (it *errorIterator) Value() []byte         { return nil }
+func (it *errorIterator) Valid() bool           { return false }
+func (it *errorIterator) Close() error          { return nil }
+func (it *errorIterator) Error() error          { return it.err }
+func (it *errorIterator) Path() Path            { return nil }
 
 // edgeIterator implements EdgeIterator using the generic Iterator.
 type edgeIterator struct {
@@ -114,9 +139,11 @@ func (it *edgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 	if !it.valid {
 		return uuid.Nil, uuid.Nil, "", it.Error()
 	}
-	// Key format: [Prefix] + [SourceID] + [LabelLen] + [Label] + [TargetID]
+	// Key format: [Prefix] + [SourceID] + [LabelLen] + [Label] +
+	// [TargetID] + [EdgeID]. Incoming keys use target/source in place of
+	// source/target.
 	key := it.iter.Key()
-	if len(key) < 35 {
+	if len(key) < 51 {
 		return uuid.Nil, uuid.Nil, "", encoding.ErrInvalidKeyFormat
 	}
 
@@ -135,7 +162,7 @@ func (it *edgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 	offset += n
 
 	var otherID uuid.UUID
-	copy(otherID[:], key[offset:])
+	copy(otherID[:], key[offset:offset+16])
 
 	return edgeID, otherID, label, nil
 }
@@ -155,7 +182,7 @@ func (it *edgeIterator) Key() []byte            { return it.iter.Key() }
 func (it *edgeIterator) Value() []byte          { return it.iter.Value() }
 func (it *edgeIterator) Valid() bool            { return it.valid }
 func (it *edgeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
-func (it *edgeIterator) Path() []interface{}    { return it.iter.Path() }
+func (it *edgeIterator) Path() Path             { return it.iter.Path() }
 
 // nodeIterator implements NodeIterator using the generic Iterator.
 type nodeIterator struct {
@@ -210,7 +237,7 @@ func (it *nodeIterator) Key() []byte            { return it.iter.Key() }
 func (it *nodeIterator) Value() []byte          { return it.iter.Value() }
 func (it *nodeIterator) Valid() bool            { return it.valid }
 func (it *nodeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
-func (it *nodeIterator) Path() []interface{}    { return it.iter.Path() }
+func (it *nodeIterator) Path() Path             { return it.iter.Path() }
 
 // nodeIndexIterator implements NodeIterator using the index keys.
 type nodeIndexIterator struct {
@@ -300,7 +327,7 @@ func (it *nodeIndexIterator) Value() []byte {
 
 func (it *nodeIndexIterator) Valid() bool            { return it.valid }
 func (it *nodeIndexIterator) SeekGE(key []byte) bool { return false } // Seek on index iterator implies index seek, which means prefix needs to change.
-func (it *nodeIndexIterator) Path() []interface{} {
+func (it *nodeIndexIterator) Path() Path {
 	if !it.valid {
 		return nil
 	}
@@ -308,9 +335,7 @@ func (it *nodeIndexIterator) Path() []interface{} {
 	if err != nil {
 		return nil
 	}
-	return []interface{}{
-		map[string]interface{}{"id": id, "label": label, "type": "node"},
-	}
+	return Path{{Kind: PathNode, ID: id, Label: label}}
 }
 
 // fixedNodeIterator iterates over a fixed slice of UUIDs
@@ -358,10 +383,8 @@ func (it *fixedNodeIterator) Value() []byte          { return []byte(it.curLbl) 
 func (it *fixedNodeIterator) Valid() bool            { return it.idx >= 0 && it.idx < len(it.ids) }
 func (it *fixedNodeIterator) SeekGE(key []byte) bool { return false }
 
-func (it *fixedNodeIterator) Path() []interface{} {
-	return []interface{}{
-		map[string]interface{}{"id": it.curID, "label": it.curLbl, "type": "node"},
-	}
+func (it *fixedNodeIterator) Path() Path {
+	return Path{{Kind: PathNode, ID: it.curID, Label: it.curLbl}}
 }
 
 // flatMapEdgeIterator flattens streams of EdgeIterators
@@ -460,10 +483,10 @@ func (it *flatMapEdgeIterator) Value() []byte {
 func (it *flatMapEdgeIterator) Valid() bool          { return it.curIter != nil && it.curIter.Valid() }
 func (it *flatMapEdgeIterator) SeekGE(k []byte) bool { return false }
 
-func (it *flatMapEdgeIterator) Path() []interface{} {
+func (it *flatMapEdgeIterator) Path() Path {
 	p := it.prev.Path()
 	if p == nil {
-		p = []interface{}{}
+		p = Path{}
 	}
 
 	if it.curIter == nil {
@@ -472,9 +495,9 @@ func (it *flatMapEdgeIterator) Path() []interface{} {
 
 	if ei, ok := it.curIter.(EdgeIterator); ok {
 		id, other, label, _ := ei.Edge()
-		edge := map[string]interface{}{"id": id, "other": other, "label": label, "type": "edge"}
+		edge := PathElement{Kind: PathEdge, ID: id, Other: other, Label: label}
 
-		newPath := make([]interface{}, len(p)+1)
+		newPath := make(Path, len(p)+1)
 		copy(newPath, p)
 		newPath[len(p)] = edge
 		return newPath
@@ -516,7 +539,7 @@ func (it *filterIterator) Key() []byte          { return it.prev.Key() }
 func (it *filterIterator) Value() []byte        { return it.prev.Value() }
 func (it *filterIterator) Valid() bool          { return it.prev.Valid() }
 func (it *filterIterator) SeekGE(k []byte) bool { return it.prev.SeekGE(k) }
-func (it *filterIterator) Path() []interface{}  { return it.prev.Path() }
+func (it *filterIterator) Path() Path           { return it.prev.Path() }
 
 func (it *filterIterator) Node() (uuid.UUID, string, error) {
 	if ni, ok := it.prev.(NodeIterator); ok {
@@ -531,10 +554,95 @@ func (it *filterIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 	return uuid.Nil, uuid.Nil, "", errors.New("not an edge iterator")
 }
 
+// valueIterator projects requested property values as a scalar stream.
+type valueIterator struct {
+	tx      *Tx
+	prev    Iterator
+	keys    []string
+	pending []interface{}
+	current interface{}
+	valid   bool
+	err     error
+}
+
+func newValueIterator(tx *Tx, prev Iterator, keys []string) *valueIterator {
+	return &valueIterator{tx: tx, prev: prev, keys: append([]string(nil), keys...)}
+}
+
+func (it *valueIterator) Next() bool {
+	it.valid = false
+	for {
+		if len(it.pending) > 0 {
+			it.current = it.pending[0]
+			it.pending = it.pending[1:]
+			it.valid = true
+			return true
+		}
+		if it.err != nil || !it.prev.Next() {
+			return false
+		}
+
+		var entityID uuid.UUID
+		switch prev := it.prev.(type) {
+		case NodeIterator:
+			id, _, err := prev.Node()
+			if err != nil {
+				it.err = err
+				return false
+			}
+			entityID = id
+		case EdgeIterator:
+			id, _, _, err := prev.Edge()
+			if err != nil {
+				it.err = err
+				return false
+			}
+			entityID = id
+		default:
+			it.err = errors.New("pipeline type mismatch: Values requires nodes or edges")
+			return false
+		}
+
+		props, err := it.tx.GetProperties(entityID)
+		if err != nil {
+			it.err = err
+			return false
+		}
+		for _, key := range it.keys {
+			if value, exists := props[key]; exists {
+				it.pending = append(it.pending, value)
+			}
+		}
+	}
+}
+
+func (it *valueIterator) Result() (interface{}, error) {
+	if !it.valid {
+		if err := it.Error(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("invalid iterator state")
+	}
+	return it.current, nil
+}
+
+func (it *valueIterator) Close() error       { return it.prev.Close() }
+func (it *valueIterator) Key() []byte        { return nil }
+func (it *valueIterator) Value() []byte      { return nil }
+func (it *valueIterator) Valid() bool        { return it.valid }
+func (it *valueIterator) SeekGE([]byte) bool { return false }
+func (it *valueIterator) Path() Path         { return it.prev.Path() }
+func (it *valueIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	return it.prev.Error()
+}
+
 // pathIterator exposes the path history as the value
 type pathIterator struct {
 	prev    Iterator
-	curPath []interface{}
+	curPath Path
 }
 
 func newPathIterator(prev Iterator) *pathIterator {
@@ -543,31 +651,35 @@ func newPathIterator(prev Iterator) *pathIterator {
 
 func (it *pathIterator) Next() bool {
 	if it.prev.Next() {
-		it.curPath = it.prev.Path()
+		it.curPath = append(Path(nil), it.prev.Path()...)
 		return true
 	}
 	return false
 }
 
 func (it *pathIterator) Key() []byte {
-	return []byte("PATH")
+	return nil
 }
 
 func (it *pathIterator) Value() []byte {
 	return nil
 }
 
+func (it *pathIterator) Result() (interface{}, error) {
+	return append(Path(nil), it.curPath...), nil
+}
+
 func (it *pathIterator) Close() error         { return it.prev.Close() }
 func (it *pathIterator) Error() error         { return it.prev.Error() }
 func (it *pathIterator) Valid() bool          { return it.prev.Valid() }
 func (it *pathIterator) SeekGE(k []byte) bool { return it.prev.SeekGE(k) }
-func (it *pathIterator) Path() []interface{}  { return it.curPath }
+func (it *pathIterator) Path() Path           { return append(Path(nil), it.curPath...) }
 
 // repeatIterator implements BFS traversal
 type traverser struct {
 	id    uuid.UUID
 	label string
-	path  []interface{}
+	path  Path
 	depth int
 }
 
@@ -679,7 +791,7 @@ func (it *repeatIterator) Key() []byte          { return encoding.EncodeNodeKey(
 func (it *repeatIterator) Value() []byte        { return []byte(it.curItem.label) }
 func (it *repeatIterator) Valid() bool          { return true }
 func (it *repeatIterator) SeekGE(k []byte) bool { return false }
-func (it *repeatIterator) Path() []interface{}  { return it.curItem.path }
+func (it *repeatIterator) Path() Path           { return it.curItem.path }
 
 // neighborIterator wraps an EdgeIterator and yields the neighbor Node.
 type neighborIterator struct {
@@ -738,8 +850,11 @@ func (it *neighborIterator) Key() []byte          { return encoding.EncodeNodeKe
 func (it *neighborIterator) Value() []byte        { return []byte(it.curLbl) }
 func (it *neighborIterator) Valid() bool          { return it.iter.Valid() } // approx
 func (it *neighborIterator) SeekGE(k []byte) bool { return false }
-func (it *neighborIterator) Path() []interface{} {
+func (it *neighborIterator) Path() Path {
 	// Extend path from edge
 	p := it.iter.Path()
-	return append(p, map[string]interface{}{"id": it.curID, "label": it.curLbl, "type": "node"})
+	path := make(Path, len(p)+1)
+	copy(path, p)
+	path[len(p)] = PathElement{Kind: PathNode, ID: it.curID, Label: it.curLbl}
+	return path
 }

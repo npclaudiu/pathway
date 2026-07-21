@@ -2,6 +2,7 @@ package pathway
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -50,6 +51,7 @@ func TestQuery_Path_Check(t *testing.T) {
 
 	u1 := uuid.New()
 	u2 := uuid.New()
+	var edgeID uuid.UUID
 	if err := db.Update(ctx, func(tx *Tx) error {
 		if err := tx.PutNode(u1, "A"); err != nil {
 			return err
@@ -57,63 +59,43 @@ func TestQuery_Path_Check(t *testing.T) {
 		if err := tx.PutNode(u2, "B"); err != nil {
 			return err
 		}
-		if _, err := tx.PutEdge(u1, u2, "LINK"); err != nil {
-			return err
-		}
-		return nil
+		var err error
+		edgeID, err = tx.PutEdge(u1, u2, "LINK")
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	g := NewTraversalSource(db)
-
-	// V(u1).Out().Path()
 	res, err := g.V(u1.String()).Out("LINK").Path().ToList()
 	if err != nil {
 		t.Fatalf("Path query failed: %v", err)
 	}
-
-	if len(res) == 0 {
-		t.Fatal("empty result")
+	if len(res) != 1 {
+		t.Fatalf("expected one path, got %d", len(res))
+	}
+	path, ok := res[0].(Path)
+	if !ok {
+		t.Fatalf("path result has type %T, want pathway.Path", res[0])
+	}
+	want := Path{
+		{Kind: PathNode, ID: u1, Label: "A"},
+		{Kind: PathEdge, ID: edgeID, Label: "LINK", Other: u2},
+		{Kind: PathNode, ID: u2, Label: "B"},
+	}
+	if !reflect.DeepEqual(path, want) {
+		t.Fatalf("path = %#v, want %#v", path, want)
 	}
 
-	// Path should be a slice
-	// Implementation detail: ToList might flatten it or return as is?
-	// ToList returns []interface{}. If iterator returns Path, it returns the Path slice?
-	// The `pathIterator.Value()` returns nil, but ToList extracts `iter.Key()` if not node/edge?
-	// Wait, ToList impl:
-	// else { results = append(results, iter.Key()) }
-	// And pathIterator.Key() returns "PATH".
-	// This implies ToList logic for generic iterators is flawed for Path?
-	// Let's check ToList implementation in query.go again.
-	// It checks NodeIterator, EdgeIterator. Else iter.Key().
-	// pathIterator is likely NOT Node/EdgeIterator.
-	// So it returns "PATH" bytes.
-	// Actually, ToList currently doesn't call Path().
-	// This means `Path()` step is currently returning a `pathIterator` which is just a generic Iterator.
-	// And ToList logic for generic iterator is to return Key().
-	// So this test might reveal that `Path()` result is not correctly extracted in ToList.
-	// But let's write the test to confirm current behavior or strict correctness.
-
-	// Actually, looking at `iterator.go`:
-	// `pathIterator` does not implement Node/Edge methods.
-	// So ToList will fall through to `iter.Key()`, which returns []byte("PATH").
-	// So we verify we get "PATH". Ideally we want the path data.
-	// The user asked for tests to cover code.
-	// If the code is buggy (ToList logic doesn't support Path extraction properly), the test should matching existing behavior OR we fix it.
-	// Given "Target complete code coverage", simply exercising it is enough.
-	// But better to fix.
-	// However, I observe that `pathIterator` DOES implement `Path()`.
-	// ToList should use `iter.Path()`?
-	// But `Path()` is method on Iterator interface, returning []interface{}.
-	// But ToList only calls it if...?
-	// ToList uses iter.Next(). Then type switch.
-	// It doesn't use `iter.Path()`.
-	// So strictly speaking, `Path()` step functionality of returning the path structure is broken in `ToList`.
-	// I'll assertion on "PATH" or fix it later. For now, asserting "PATH" ensures I cover the lines.
-	// Or maybe `pathIterator` DOES implement `NodeIterator`? No.
-
-	// Verify behavior: it returns something.
+	// Materialized paths do not share mutable backing storage with later reads.
+	path[0].Label = "mutated"
+	again, err := g.V(u1.String()).Out("LINK").Path().ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0].(Path)[0].Label != "A" {
+		t.Fatal("path result was mutated through shared backing storage")
+	}
 }
 
 func TestQuery_HasLabel(t *testing.T) {
@@ -232,23 +214,49 @@ func TestQuery_Repeat(t *testing.T) {
 }
 
 func TestQuery_Values(t *testing.T) {
-	// Values is currently a no-op placeholder, verifying it passes through.
-	db, _ := Open(":memory:")
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer closeTestResource(t, db)
 	id := uuid.New()
 	if err := db.Update(context.Background(), func(tx *Tx) error {
-		return tx.PutNode(id, "Node")
+		if err := tx.PutNode(id, "Node"); err != nil {
+			return err
+		}
+		return tx.SetProperties(id, map[string]interface{}{
+			"name":   "Alice",
+			"age":    30,
+			"active": true,
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	g := NewTraversalSource(db)
-	res, err := g.V(id.String()).Values("any").ToList()
+	res, err := g.V(id.String()).Values("name").ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res) != 1 {
-		t.Error("expected passthrough result")
+	if len(res) != 1 || res[0] != "Alice" {
+		t.Fatalf("single-key projection = %#v, want [Alice]", res)
+	}
+
+	res, err = g.V(id.String()).Values("name", "missing", "age", "active").ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []interface{}{"Alice", float64(30), true}
+	if !reflect.DeepEqual(res, want) {
+		t.Fatalf("multi-key mixed projection = %#v, want %#v", res, want)
+	}
+
+	res, err = g.V(id.String()).Values("missing").ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 0 {
+		t.Fatalf("missing property should be omitted, got %#v", res)
 	}
 }
 

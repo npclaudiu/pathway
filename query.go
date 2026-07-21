@@ -13,6 +13,26 @@ import (
 type Traversal struct {
 }
 
+// PathElementKind identifies the graph element represented by a path entry.
+type PathElementKind string
+
+const (
+	PathNode PathElementKind = "node"
+	PathEdge PathElementKind = "edge"
+)
+
+// PathElement is one typed node or edge in a traversal path. Other is set for
+// edges and identifies the endpoint reached by that traversal step.
+type PathElement struct {
+	Kind  PathElementKind
+	ID    uuid.UUID
+	Label string
+	Other uuid.UUID
+}
+
+// Path is an ordered snapshot of the elements visited by a traversal result.
+type Path []PathElement
+
 // TraversalSource is the starting point for graph traversals.
 // It holds a reference to the database and spawns TraversalPipelines.
 type TraversalSource struct {
@@ -209,7 +229,8 @@ func (tp *TraversalPipeline) Emit() *TraversalPipeline {
 	return tp
 }
 
-// Path transforms the current stream to return the full path history of each element.
+// Path transforms the current stream into immutable Path values containing the
+// ordered nodes and edges visited for each result.
 // Usage:
 //
 //	g.V().Out().Path()
@@ -227,17 +248,13 @@ func (tp *TraversalPipeline) Path() *TraversalPipeline {
 
 // Projection Steps
 
-// Values extracts property values from the current elements.
-// Not fully implemented in Phase 1 (returns raw elements).
+// Values projects properties from the current elements. It emits one typed
+// scalar per requested key, in key order. Missing properties are omitted, and
+// calling Values without keys produces an empty result stream.
 func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
 	tp.activeRepeat = nil
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
-		// Map step: Extract properties
-		// Used via flatMap or custom map iterator.
-		// For V1, newMapIterator?
-		// Let's implement inline or helper later.
-		// Placeholder returning prev for now to allow compilation
-		return prev
+		return newValueIterator(tx, prev, keys)
 	})
 	return tp
 }
@@ -291,7 +308,14 @@ func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
 	// 3. Drain Iterator
 	for iter.Next() {
 		// Extract value
-		if ni, ok := iter.(NodeIterator); ok {
+		if ri, ok := iter.(resultIterator); ok {
+			value, e := ri.Result()
+			if e != nil {
+				err = e
+				return nil, err
+			}
+			results = append(results, value)
+		} else if ni, ok := iter.(NodeIterator); ok {
 			id, lbl, e := ni.Node()
 			if e != nil {
 				err = e

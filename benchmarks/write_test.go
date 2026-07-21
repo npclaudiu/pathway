@@ -61,14 +61,14 @@ func BenchmarkBatchInsertNode_100(b *testing.B) {
 
 func BenchmarkInsertEdge(b *testing.B) {
 	RunBenchmark(b, func(b *testing.B, db *pathway.Database) {
-		// Pre-populate nodes to avoid error if edge requires nodes (optional depending on API,
-		// but assuming loose schema, let's just make valid edges)
+		// Edge endpoints must exist. Reusing them intentionally measures parallel
+		// edge insertion under Pathway's multigraph semantics.
 		nodes := GenerateRandomGraph(b, db, 2, 0)
 		if len(nodes) < 2 {
 			b.Fatal("not enough nodes generated")
 		}
-		fromUUID, _ := uuid.Parse(nodes[0])
-		toUUID, _ := uuid.Parse(nodes[1])
+		fromUUID := nodes[0]
+		toUUID := nodes[1]
 		ctx := b.Context()
 
 		b.ResetTimer()

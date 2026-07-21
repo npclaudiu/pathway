@@ -48,7 +48,7 @@ tidy:
 	go mod tidy
 
 .PHONY: check
-check: fmt vet tidy lint
+check: fmt vet tidy lint docs-check
 
 .PHONY: lint
 lint: $(GOLANGCI_LINT)
@@ -57,6 +57,10 @@ lint: $(GOLANGCI_LINT)
 .PHONY: docs
 docs: $(GOMARKDOC)
 	$(GOMARKDOC) --output docs/api.md .
+
+.PHONY: docs-check
+docs-check: docs
+	git diff --exit-code -- docs/api.md
 
 .PHONY: clean
 clean:

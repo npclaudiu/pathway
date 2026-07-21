@@ -2,6 +2,7 @@ package pathway
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -80,6 +81,9 @@ func OpenWithOptions(path string, opts Options) (*Database, error) {
 	db, err := pebble.Open(path, pOpts)
 	if err != nil {
 		return nil, err
+	}
+	if err := ensureSchema(db); err != nil {
+		return nil, errors.Join(err, db.Close())
 	}
 	return &Database{db: db, options: opts}, nil
 }

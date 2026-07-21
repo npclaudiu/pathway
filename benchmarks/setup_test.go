@@ -30,6 +30,7 @@ func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 
 	// 1. In-Memory Benchmark
 	b.Run("Memory", func(b *testing.B) {
+		b.ReportAllocs()
 		db, err := pathway.Open(":memory:")
 		if err != nil {
 			b.Fatalf("failed to open memory db: %v", err)
@@ -40,6 +41,7 @@ func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 
 	// 2. Disk-Based Benchmark
 	b.Run("Disk", func(b *testing.B) {
+		b.ReportAllocs()
 		dir, err := os.MkdirTemp("", "pathway-bench-*")
 		if err != nil {
 			b.Fatalf("failed to create temp dir: %v", err)
@@ -57,9 +59,10 @@ func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 
 // GenerateRandomGraph creates a graph with `nodeCount` nodes and `edgeCount` edges.
 // It returns the list of node IDs created.
-func GenerateRandomGraph(b *testing.B, db *pathway.Database, nodeCount, edgeCount int) []string {
-	var nodeIDs []string
+func GenerateRandomGraph(b *testing.B, db *pathway.Database, nodeCount, edgeCount int) []uuid.UUID {
+	nodeIDs := make([]uuid.UUID, 0, nodeCount)
 	ctx := b.Context()
+	rng := rand.New(rand.NewSource(1))
 
 	// batch size for inserts
 	batchSize := 1000
@@ -74,12 +77,12 @@ func GenerateRandomGraph(b *testing.B, db *pathway.Database, nodeCount, edgeCoun
 		err := db.Update(ctx, func(tx *pathway.Tx) error {
 			for j := i; j < end; j++ {
 				id := uuid.New()
-				nodeIDs = append(nodeIDs, id.String())
+				nodeIDs = append(nodeIDs, id)
 				if err := tx.PutNode(id, "Person"); err != nil {
 					return err
 				}
 				if err := tx.SetProperties(id, map[string]interface{}{
-					"age":  rand.Intn(100),
+					"age":  rng.Intn(100),
 					"name": fmt.Sprintf("User-%d", j),
 				}); err != nil {
 					return err
@@ -102,21 +105,20 @@ func GenerateRandomGraph(b *testing.B, db *pathway.Database, nodeCount, edgeCoun
 
 			err := db.Update(ctx, func(tx *pathway.Tx) error {
 				for j := i; j < end; j++ {
-					fromStr := nodeIDs[rand.Intn(len(nodeIDs))]
-					toStr := nodeIDs[rand.Intn(len(nodeIDs))]
-					if fromStr == toStr {
-						toStr = nodeIDs[(rand.Intn(len(nodeIDs))+1)%len(nodeIDs)]
-					}
-
-					from, _ := uuid.Parse(fromStr)
-					to, _ := uuid.Parse(toStr)
+					// Build deterministic adjacency layers. When edgeCount is a
+					// multiple of nodeCount, every node has the same out-degree.
+					fromIndex := j % len(nodeIDs)
+					layer := j / len(nodeIDs)
+					toIndex := (fromIndex + 1 + layer%(len(nodeIDs)-1)) % len(nodeIDs)
+					from := nodeIDs[fromIndex]
+					to := nodeIDs[toIndex]
 
 					edgeID, err := tx.PutEdge(from, to, "KNOWS")
 					if err != nil {
 						return err
 					}
 					if err := tx.SetProperties(edgeID, map[string]interface{}{
-						"weight": rand.Float64(),
+						"weight": float64(j+1) / float64(edgeCount),
 					}); err != nil {
 						return err
 					}
