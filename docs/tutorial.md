@@ -26,6 +26,8 @@ import (
 func main() {
     // Indexes are optional. Configure only properties used by FindNodes.
     db, err := pathway.OpenWithOptions(":memory:", pathway.Options{
+        // DurabilitySync is the default and is shown explicitly here.
+        Durability: pathway.DurabilitySync,
         Indexes: []pathway.IndexDefinition{
             {Label: "User", Property: "username"},
         },
@@ -45,6 +47,12 @@ stored definitions. Passing a non-nil `Options.Indexes` slice instead makes it
 the desired set: newly added indexes are rebuilt from existing nodes and
 removed indexes are dropped atomically. `FindNodes` returns no matches for an
 unindexed label/property pair.
+
+`DurabilitySync` waits for each successful `Update` to be synchronized to
+stable storage. For replayable bulk imports, `DurabilityNoSync` can reduce
+commit latency, but a process or machine crash may lose recent updates that
+already returned successfully. It does not change transaction atomicity, and
+it does not relax schema or index-definition migrations.
 
 ## 2. Data Model
 

@@ -27,11 +27,37 @@ func removeBenchmarkDirectory(b testing.TB, path string) {
 // RunBenchmark executes a benchmark function against both Memory and Disk storage backends.
 func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 	b.Helper()
-	options := pathway.Options{Indexes: []pathway.IndexDefinition{
-		{Label: "Person", Property: "name"},
-		{Label: "Person", Property: "age"},
-	}}
+	runBenchmark(b, benchmarkOptions(pathway.DurabilitySync), fn)
+}
 
+// RunWriteBenchmark measures writes with both durable and relaxed commits.
+func RunWriteBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
+	b.Helper()
+	for _, mode := range []struct {
+		name       string
+		durability pathway.DurabilityMode
+	}{
+		{name: "Sync", durability: pathway.DurabilitySync},
+		{name: "NoSync", durability: pathway.DurabilityNoSync},
+	} {
+		b.Run(mode.name, func(b *testing.B) {
+			runBenchmark(b, benchmarkOptions(mode.durability), fn)
+		})
+	}
+}
+
+func benchmarkOptions(durability pathway.DurabilityMode) pathway.Options {
+	return pathway.Options{
+		Durability: durability,
+		Indexes: []pathway.IndexDefinition{
+			{Label: "Person", Property: "name"},
+			{Label: "Person", Property: "age"},
+		},
+	}
+}
+
+func runBenchmark(b *testing.B, options pathway.Options, fn func(b *testing.B, db *pathway.Database)) {
+	b.Helper()
 	// 1. In-Memory Benchmark
 	b.Run("Memory", func(b *testing.B) {
 		b.ReportAllocs()

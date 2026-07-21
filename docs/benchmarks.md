@@ -31,6 +31,14 @@ The shared benchmark fixture explicitly configures `Person/name` and
 write benchmarks include the maintenance cost only for those selected
 properties.
 
+Every write benchmark has `Sync` and `NoSync` sub-benchmarks, each containing
+the usual `Memory` and `Disk` backends. For example,
+`BenchmarkInsertNode/Sync/Disk` measures the durable default, while
+`BenchmarkInsertNode/NoSync/Disk` measures an explicitly relaxed WAL commit.
+The in-memory variants expose CPU and allocation differences but cannot measure
+storage durability. Never interpret the `NoSync` throughput as free: recent
+successful updates may be lost after a process or machine crash.
+
 For before/after comparisons, capture both revisions and use `benchstat`:
 
 ```bash

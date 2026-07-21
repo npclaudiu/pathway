@@ -114,6 +114,25 @@ existing database and creates no indexes for a new database. Use a non-nil
 empty slice to remove all indexes. `FindNodes` only returns results for a
 configured label/property pair.
 
+### Write durability
+
+Updates are synchronously durable by default. For replayable imports where
+throughput matters more than retaining the most recent acknowledged writes
+after a crash, opt into relaxed commits explicitly:
+
+```go
+db, err := pathway.OpenWithOptions("graph.db", pathway.Options{
+	Durability: pathway.DurabilityNoSync,
+})
+```
+
+Both modes commit each `Update` as one atomic Pebble batch and make it visible
+before returning. `DurabilitySync` (the zero value) synchronizes the WAL before
+success is reported. `DurabilityNoSync` permits Pebble to buffer recent WAL
+writes in process memory, so a process or machine crash can lose successful
+updates. Schema migrations and index-definition changes always use synced
+commits.
+
 ### Fluid Query Capabilities
 
 Pathway currently supports these Gremlin-inspired traversal steps:

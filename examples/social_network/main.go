@@ -17,7 +17,11 @@ func main() {
 }
 
 func run() error {
-	db, err := pathway.Open(":memory:")
+	db, err := pathway.OpenWithOptions(":memory:", pathway.Options{
+		// This is the default. Keep it explicit when adapting the example to an
+		// on-disk database so successful updates survive crashes.
+		Durability: pathway.DurabilitySync,
+	})
 	if err != nil {
 		return err
 	}

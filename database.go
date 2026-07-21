@@ -26,6 +26,21 @@ type IndexDefinition struct {
 	Property string
 }
 
+// DurabilityMode controls whether Update synchronizes its commit to stable
+// storage before returning.
+type DurabilityMode uint8
+
+const (
+	// DurabilitySync synchronizes every successful Update. This is the default
+	// and protects committed updates from process and machine crashes.
+	DurabilitySync DurabilityMode = iota
+
+	// DurabilityNoSync skips the commit sync. Updates remain atomic and become
+	// visible immediately, but recent successful updates may be lost after a
+	// process or machine crash. Use it only when the source data can be replayed.
+	DurabilityNoSync
+)
+
 // Options configuration for the database.
 //
 // Example:
@@ -52,6 +67,12 @@ type Options struct {
 	// Use this to tune cache sizes, compaction settings, or file system options.
 	PebbleOptions *pebble.Options
 
+	// Durability controls Update commit synchronization. The zero value is
+	// DurabilitySync. DurabilityNoSync improves write throughput by allowing
+	// Pebble to buffer recent WAL writes in memory, so acknowledged updates may
+	// be lost after a process or machine crash.
+	Durability DurabilityMode
+
 	// Indexes is the desired set of node-property indexes. A nil slice preserves
 	// definitions already stored in an existing database (and creates none for a
 	// new database); a non-nil empty slice removes every index. Added indexes are
@@ -66,6 +87,7 @@ type Database struct {
 	nextTxID atomic.Uint64
 	options  Options
 	indexes  map[string]map[string]struct{}
+	writeOpt pebble.WriteOptions
 }
 
 // Open creates or opens a graph database at the given path with default options.
@@ -82,9 +104,13 @@ func Open(path string) (*Database, error) {
 }
 
 // OpenWithOptions opens the database with specific options. In addition to
-// logging, monitoring hooks, and Pebble settings, options configure persisted
-// exact-match node-property indexes.
+// logging, monitoring hooks, and Pebble settings, options configure write
+// durability and persisted exact-match node-property indexes.
 func OpenWithOptions(path string, opts Options) (*Database, error) {
+	writeOpt, err := writeOptionsForDurability(opts.Durability)
+	if err != nil {
+		return nil, err
+	}
 	pOpts := opts.PebbleOptions
 	if pOpts == nil {
 		pOpts = &pebble.Options{}
@@ -105,10 +131,22 @@ func OpenWithOptions(path string, opts Options) (*Database, error) {
 		return nil, errors.Join(err, db.Close())
 	}
 	return &Database{
-		db:      db,
-		options: opts,
-		indexes: indexDefinitionMap(definitions),
+		db:       db,
+		options:  opts,
+		indexes:  indexDefinitionMap(definitions),
+		writeOpt: writeOpt,
 	}, nil
+}
+
+func writeOptionsForDurability(mode DurabilityMode) (pebble.WriteOptions, error) {
+	switch mode {
+	case DurabilitySync:
+		return pebble.WriteOptions{Sync: true}, nil
+	case DurabilityNoSync:
+		return pebble.WriteOptions{Sync: false}, nil
+	default:
+		return pebble.WriteOptions{}, ErrInvalidDurability
+	}
 }
 
 // Close closes the database connection and releases all resources.
@@ -118,8 +156,10 @@ func (d *Database) Close() error {
 	return d.db.Close()
 }
 
-// Update executes a function within a read-write transaction.
-// The transaction is committed if the function returns nil, or rolled back if it returns an error.
+// Update executes a function within a read-write transaction. The transaction
+// is committed if the function returns nil, or rolled back if it returns an
+// error. Commit synchronization follows Options.Durability; the default is
+// DurabilitySync.
 //
 // Usage:
 //
@@ -142,7 +182,7 @@ func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error {
 		return err // Rollback is implicit as batch is not applied
 	}
 
-	return batch.Commit(pebble.Sync)
+	return batch.Commit(&d.writeOpt)
 }
 
 // View executes a function within a read-only transaction.

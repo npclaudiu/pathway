@@ -8,7 +8,7 @@ import (
 )
 
 func BenchmarkInsertNode(b *testing.B) {
-	RunBenchmark(b, func(b *testing.B, db *pathway.Database) {
+	RunWriteBenchmark(b, func(b *testing.B, db *pathway.Database) {
 		ctx := b.Context()
 
 		b.ResetTimer()
@@ -31,7 +31,7 @@ func BenchmarkInsertNode(b *testing.B) {
 
 func BenchmarkBatchInsertNode_100(b *testing.B) {
 	const batchSize = 100
-	RunBenchmark(b, func(b *testing.B, db *pathway.Database) {
+	RunWriteBenchmark(b, func(b *testing.B, db *pathway.Database) {
 		ctx := b.Context()
 
 		b.ResetTimer()
@@ -60,7 +60,7 @@ func BenchmarkBatchInsertNode_100(b *testing.B) {
 }
 
 func BenchmarkInsertEdge(b *testing.B) {
-	RunBenchmark(b, func(b *testing.B, db *pathway.Database) {
+	RunWriteBenchmark(b, func(b *testing.B, db *pathway.Database) {
 		// Edge endpoints must exist. Reusing them intentionally measures parallel
 		// edge insertion under Pathway's multigraph semantics.
 		nodes := GenerateRandomGraph(b, db, 2, 0)

@@ -12,4 +12,5 @@ var (
 	ErrEntityNotFound    = errors.New("node or edge not found")
 	ErrDanglingEdge      = errors.New("cannot create edge: source or target node does not exist")
 	ErrUnsupportedSchema = errors.New("unsupported pathway storage schema")
+	ErrInvalidDurability = errors.New("invalid durability mode")
 )

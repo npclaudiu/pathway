@@ -268,6 +268,17 @@ records. Removing one issues a range deletion over its exact label/property
 prefix. Index changes therefore require exclusive database open and may make
 startup expensive, but normal transactions never coordinate a mutable catalog.
 
+`Options.Durability` controls ordinary `Database.Update` commits. Its zero value
+is `DurabilitySync`, preserving the historical guarantee that a successful
+update has synchronized its WAL record to stable storage. `DurabilityNoSync`
+uses an unsynchronized WAL commit: the batch is still atomic and immediately
+visible, but Pebble may retain recent WAL bytes in process memory, so a process
+or machine crash can lose updates whose callbacks already returned success.
+The resolved Pebble write option is validated once at open and cached on
+`Database`; invalid enum values return `ErrInvalidDurability`. Schema marker
+writes, migrations, and index-definition reconciliation deliberately continue
+to use `pebble.Sync` in both modes.
+
 `Database` is safe for concurrent use to the extent provided by Pebble. The
 atomic transaction counter assigns internal IDs, but those IDs and the optional
 `Logger` are not currently used. A `TraversalPipeline` or `Tx` should not be
@@ -279,16 +290,18 @@ shared concurrently unless future code explicitly adds such a guarantee.
 because mutation algorithms read their own earlier writes—for example, nodes
 can be created and then connected in one callback.
 
-If the callback succeeds, the entire batch commits with `pebble.Sync`; if it
-returns an error, closing the uncommitted batch rolls it back. This gives atomic
-durable graph mutations. It does not provide application-level conflict
-detection or serializable isolation between concurrent `Update` callbacks. The
-write path does not create a separate snapshot, so maintainers must not infer a
-stronger transaction model than Pebble's batch behavior.
+If the callback succeeds, the entire batch commits with the database's resolved
+durability option; if it returns an error, closing the uncommitted batch rolls
+it back. Both modes preserve batch atomicity and read-your-writes. The default
+synced mode makes the update durable before returning; the relaxed mode trades
+that crash guarantee for lower commit latency. Neither mode provides
+application-level conflict detection or serializable isolation between
+concurrent `Update` callbacks. The write path does not create a separate
+snapshot, so maintainers must not infer a stronger transaction model than
+Pebble's batch behavior.
 
-Every update is currently synchronous. Single-record workloads pay a WAL sync
-per callback; grouping writes in one `Update` is the primary bulk-ingestion
-optimization.
+Single-record durable workloads pay a WAL sync per callback; grouping writes in
+one `Update` remains the primary bulk-ingestion optimization.
 
 The context passed to `Update` is stored on `Tx` but is not checked by point
 reads, scans, or commit. Cancellation therefore does not currently interrupt a
@@ -612,8 +625,8 @@ The principal costs and write amplification are architectural, not incidental:
 | `Values` | one property point read and full decode per entity |
 | `ToList` | snapshot lifecycle plus full result allocation |
 
-All updates use synchronous durability. Benchmarks therefore distinguish batch
-size and memory versus disk. The benchmark harness seeds deterministic
+Write benchmarks exercise both synchronous and relaxed durability, with memory
+and disk backends under each mode. The benchmark harness seeds deterministic
 adjacency layers, validates cardinality outside timed regions, and separately
 measures scans and exact indexes. See [benchmarks.md](benchmarks.md) before
 interpreting results.
@@ -623,7 +636,7 @@ Likely optimization directions must preserve invariants:
 - tighter adjacency bounds for label filters;
 - carrying neighbor labels or batching label reads to remove traversal N+1;
 - streaming terminal methods and caller contexts;
-- a bulk-write/durability API rather than weakening default durability;
+- a first-class bulk-write API that builds on explicit durability;
 - a typed property codec that avoids protobuf/`structpb` hot-path conversions;
 - queue-head indexes and visited policies for repeat traversal.
 
@@ -680,8 +693,9 @@ query projections alongside the codec.
 
 Make consistency and crash guarantees explicit. Read-your-writes is required
 by graph construction. All denormalized edge and index records must commit
-atomically. If optional asynchronous durability is added, keep the existing
-synced behavior as an explicit mode and benchmark both modes.
+atomically. Keep `DurabilitySync` as the zero-value default, treat
+`DurabilityNoSync` as an explicit risk choice, and benchmark both modes. New
+relaxed modes must not silently apply to schema or index-catalog changes.
 
 ## Tests, generated files, and maintenance workflow
 
@@ -716,7 +730,7 @@ workload before the timed region and compare multiple runs with `benchstat`.
 `IMPROVEMENTS.md` is the tracked roadmap. The most consequential remaining
 design issues are:
 
-- synchronous durability without a bulk/durability policy API;
+- no first-class bulk-write API beyond grouping operations in `Update`;
 - traversal N+1 node and property reads;
 - mutable, dynamically typed pipelines and untyped normal node/edge results;
 - no context-aware or streaming terminal execution;

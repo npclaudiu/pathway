@@ -18,6 +18,7 @@ import "github.com/npclaudiu/pathway"
   - [func \(g \*Database\) NewSnapshot\(ctx context.Context\) \(\*Snapshot, error\)](<#Database.NewSnapshot>)
   - [func \(d \*Database\) Update\(ctx context.Context, fn func\(tx \*Tx\) error\) error](<#Database.Update>)
   - [func \(d \*Database\) View\(ctx context.Context, fn func\(tx \*Tx\) error\) error](<#Database.View>)
+- [type DurabilityMode](<#DurabilityMode>)
 - [type EdgeIterator](<#EdgeIterator>)
 - [type IndexDefinition](<#IndexDefinition>)
 - [type Iterator](<#Iterator>)
@@ -88,11 +89,12 @@ var (
     ErrEntityNotFound    = errors.New("node or edge not found")
     ErrDanglingEdge      = errors.New("cannot create edge: source or target node does not exist")
     ErrUnsupportedSchema = errors.New("unsupported pathway storage schema")
+    ErrInvalidDurability = errors.New("invalid durability mode")
 )
 ```
 
 <a name="Database"></a>
-## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L64-L69>)
+## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L85-L91>)
 
 Database represents a connection to the embedded graph database. It is safe for concurrent use by multiple goroutines.
 
@@ -103,7 +105,7 @@ type Database struct {
 ```
 
 <a name="Open"></a>
-### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L80>)
+### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L102>)
 
 ```go
 func Open(path string) (*Database, error)
@@ -122,16 +124,16 @@ db, err := pathway.Open(":memory:")
 ```
 
 <a name="OpenWithOptions"></a>
-### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L87>)
+### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L109>)
 
 ```go
 func OpenWithOptions(path string, opts Options) (*Database, error)
 ```
 
-OpenWithOptions opens the database with specific options. In addition to logging, monitoring hooks, and Pebble settings, options configure persisted exact\-match node\-property indexes.
+OpenWithOptions opens the database with specific options. In addition to logging, monitoring hooks, and Pebble settings, options configure write durability and persisted exact\-match node\-property indexes.
 
 <a name="Database.Close"></a>
-### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L117>)
+### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L155>)
 
 ```go
 func (d *Database) Close() error
@@ -140,7 +142,7 @@ func (d *Database) Close() error
 Close closes the database connection and releases all resources. It is important to call Close\(\) to ensure all data is flushed to disk \(if persistent\) and locks are released.
 
 <a name="Database.Compact"></a>
-### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L192>)
+### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L232>)
 
 ```go
 func (g *Database) Compact(ctx context.Context) error
@@ -149,7 +151,7 @@ func (g *Database) Compact(ctx context.Context) error
 Compact triggers Pebble's manual compaction for the entire key range. It can be used to reclaim disk space after deleting a large number of nodes or edges. Note: This operation can be expensive and should typically not be run during high load.
 
 <a name="Database.NewReadTx"></a>
-### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L177>)
+### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L217>)
 
 ```go
 func (d *Database) NewReadTx(ctx context.Context) (*Tx, error)
@@ -167,13 +169,13 @@ func (g *Database) NewSnapshot(ctx context.Context) (*Snapshot, error)
 NewSnapshot creates a snapshot of the current database state. The snapshot is tied to the lifetime of the underlying Graph \(Database\) instance.
 
 <a name="Database.Update"></a>
-### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L129>)
+### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L169>)
 
 ```go
 func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error
 ```
 
-Update executes a function within a read\-write transaction. The transaction is committed if the function returns nil, or rolled back if it returns an error.
+Update executes a function within a read\-write transaction. The transaction is committed if the function returns nil, or rolled back if it returns an error. Commit synchronization follows Options.Durability; the default is DurabilitySync.
 
 Usage:
 
@@ -184,7 +186,7 @@ err := db.Update(ctx, func(tx *pathway.Tx) error {
 ```
 
 <a name="Database.View"></a>
-### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L159>)
+### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L199>)
 
 ```go
 func (d *Database) View(ctx context.Context, fn func(tx *Tx) error) error
@@ -200,6 +202,30 @@ err := db.View(ctx, func(tx *pathway.Tx) error {
     // ...
     return nil
 })
+```
+
+<a name="DurabilityMode"></a>
+## type [DurabilityMode](<https://github.com/npclaudiu/pathway/blob/main/database.go#L31>)
+
+DurabilityMode controls whether Update synchronizes its commit to stable storage before returning.
+
+```go
+type DurabilityMode uint8
+```
+
+<a name="DurabilitySync"></a>
+
+```go
+const (
+    // DurabilitySync synchronizes every successful Update. This is the default
+    // and protects committed updates from process and machine crashes.
+    DurabilitySync DurabilityMode = iota
+
+    // DurabilityNoSync skips the commit sync. Updates remain atomic and become
+    // visible immediately, but recent successful updates may be lost after a
+    // process or machine crash. Use it only when the source data can be replayed.
+    DurabilityNoSync
+)
 ```
 
 <a name="EdgeIterator"></a>
@@ -284,7 +310,7 @@ type NodeIterator interface {
 ```
 
 <a name="Options"></a>
-## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L38-L60>)
+## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L53-L81>)
 
 Options configuration for the database.
 
@@ -315,6 +341,12 @@ type Options struct {
     // PebbleOptions allows customizing the underlying storage engine (cockroachdb/pebble).
     // Use this to tune cache sizes, compaction settings, or file system options.
     PebbleOptions *pebble.Options
+
+    // Durability controls Update commit synchronization. The zero value is
+    // DurabilitySync. DurabilityNoSync improves write throughput by allowing
+    // Pebble to buffer recent WAL writes in memory, so acknowledged updates may
+    // be lost after a process or machine crash.
+    Durability DurabilityMode
 
     // Indexes is the desired set of node-property indexes. A nil slice preserves
     // definitions already stored in an existing database (and creates none for a
