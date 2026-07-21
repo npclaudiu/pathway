@@ -171,6 +171,9 @@ Pathway currently supports these Gremlin-inspired traversal steps:
 `IDs` emits node UUIDs without loading labels, which is useful for high-degree
 traversals. `Values` emits one scalar for each requested property that exists.
 `Path` returns a typed `pathway.Path` containing ordered node and edge elements.
+Labels passed to `Out` or `In` use exact Pebble ranges instead of scanning
+unrelated adjacency entries; multi-label results have deterministic storage-key
+order regardless of argument order.
 
 ## Documentation
 

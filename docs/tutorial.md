@@ -171,6 +171,11 @@ func findFriends(db *pathway.Database, aliceID uuid.UUID) {
 }
 ```
 
+Passing one or more edge labels to `Out` or `In` restricts Pebble to the exact
+adjacency range for each unique label. Multiple labels are returned in
+deterministic adjacency-key order, not caller argument order. Omitting labels
+scans every incident edge for that direction.
+
 ### 4.2 Friends of Friends (2-Hop)
 
 Find people Alice follows, and then who *they* follow.

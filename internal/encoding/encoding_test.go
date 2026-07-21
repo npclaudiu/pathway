@@ -99,6 +99,48 @@ func TestEncodeEdgeInKey_TooLong(t *testing.T) {
 	}
 }
 
+func TestEncodeEdgeLabelPrefixesMatchFullKeys(t *testing.T) {
+	src, dst, edgeID := uuid.New(), uuid.New(), uuid.New()
+	for name, test := range map[string]struct {
+		prefix func() ([]byte, error)
+		key    func() ([]byte, error)
+	}{
+		"outgoing": {
+			prefix: func() ([]byte, error) { return EncodeEdgeOutPrefix(src, "LINK") },
+			key:    func() ([]byte, error) { return EncodeEdgeOutKey(src, dst, edgeID, "LINK") },
+		},
+		"incoming": {
+			prefix: func() ([]byte, error) { return EncodeEdgeInPrefix(dst, "LINK") },
+			key:    func() ([]byte, error) { return EncodeEdgeInKey(src, dst, edgeID, "LINK") },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			prefix, err := test.prefix()
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := test.key()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.HasPrefix(key, prefix) {
+				t.Fatalf("full key %x does not start with %x", key, prefix)
+			}
+			if len(prefix) != 1+16+2+len("LINK") {
+				t.Fatalf("prefix length = %d", len(prefix))
+			}
+		})
+	}
+
+	tooLong := strings.Repeat("x", math.MaxUint16+1)
+	if _, err := EncodeEdgeOutPrefix(src, tooLong); err != ErrInvalidLabel {
+		t.Fatalf("outgoing long-label error = %v", err)
+	}
+	if _, err := EncodeEdgeInPrefix(dst, tooLong); err != ErrInvalidLabel {
+		t.Fatalf("incoming long-label error = %v", err)
+	}
+}
+
 func TestEncodeEdgeValue(t *testing.T) {
 	id := uuid.New()
 	val := EncodeEdgeValue(id)

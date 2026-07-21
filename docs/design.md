@@ -146,11 +146,14 @@ The exact schema-v3 layouts and type tags are documented in
 are:
 
 - Node scans are ordered lexicographically by UUID bytes.
-- Adjacency scans are ordered by anchor UUID, label, other endpoint, then edge
-  UUID—not insertion time.
+- Adjacency scans are ordered by anchor UUID, encoded label, other endpoint,
+  then edge UUID—not insertion time. Encoded labels sort by byte length first
+  and label bytes second.
 - Exact index results are ordered by node UUID after the complete typed value.
-- Ordering is currently observable but is not declared a stable public query
-  ordering contract.
+- `OutEdges` and `InEdges` define this adjacency order for their results.
+  Multi-label filters preserve the same order restricted to the unique labels,
+  independently of caller argument order. Other query ordering remains
+  observable but is not a stable public contract.
 - Adjacency values repeat the edge UUID even though it is also in the key. The
   iterators read it from the value; changing this duplication is a schema
   change.
@@ -460,6 +463,9 @@ avoids nil-wrapper panics while retaining the existing API shape.
 - `nodeIterator` decodes the node UUID from the key and label from the value.
 - `edgeIterator` decodes the edge UUID from the value and the relative other
   endpoint from the adjacency key.
+- `multiEdgeIterator` lazily opens one exact label range at a time. Prefixes are
+  sorted and deduplicated before iteration, so at most one Pebble iterator is
+  open and output matches adjacency-key order.
 - `nodeIndexIterator` takes the node UUID from the key suffix and the label from
   the index key; it does not point-read the node.
 - `fixedNodeIterator` resolves explicit IDs supplied to `V` with an existence
@@ -526,8 +532,11 @@ UUIDs flow between navigation steps through an internal ID-only capability.
 point-reading each neighbor's node record. Normal node materialization,
 `HasLabel`, and `Path` request labels and perform one lazy point read per
 neighbor. `Values` uses the UUID directly and reads only the property record.
-Edge-label filtering currently occurs inside `edgeIterator` after scanning the
-node's whole adjacency range rather than by tighter Pebble bounds.
+`OutEdges` and `InEdges` encode each requested label into the prefix already
+present in adjacency keys. A single label becomes one exact Pebble lower/upper
+bound. Multiple labels become sorted, deduplicated, disjoint bounded iterators
+consumed one at a time, so unrelated labels are never advanced through and only
+one Pebble iterator is open at once.
 
 `HasLabel` currently assumes a node stream and evaluates an anonymous
 `{ID, Label}` value. There is no general typed element algebra or query planner;
@@ -673,6 +682,7 @@ The principal costs and write amplification are architectural, not incidental:
 | Exact indexed lookup | snapshot creation plus bounded index scan |
 | One-hop traversal with `IDs` | starting-node existence probe plus adjacency scan; no neighbor-label reads |
 | Label-bearing one-hop traversal | adjacency scan plus one lazy node point read per edge |
+| Label-filtered adjacency | one exact bounded scan per unique requested label |
 | `Values` | one property point read and full decode per entity |
 | `ToList` | snapshot lifecycle plus full result allocation |
 
@@ -684,7 +694,6 @@ interpreting results.
 
 Likely optimization directions must preserve invariants:
 
-- tighter adjacency bounds for label filters;
 - batching label reads when label-bearing nodes must be materialized;
 - streaming terminal methods and caller contexts;
 - a typed property codec that avoids protobuf/`structpb` hot-path conversions;

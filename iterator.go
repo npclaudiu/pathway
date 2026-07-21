@@ -88,11 +88,10 @@ func (it *errorIterator) Path() Path            { return nil }
 
 // edgeIterator implements EdgeIterator using the generic Iterator.
 type edgeIterator struct {
-	iter   Iterator
-	valid  bool
-	err    error
-	first  bool
-	labels []string // Filter: if empty, match all
+	iter  Iterator
+	valid bool
+	err   error
+	first bool
 }
 
 func (it *edgeIterator) Next() bool {
@@ -100,56 +99,12 @@ func (it *edgeIterator) Next() bool {
 		return false
 	}
 
-	// Loop to find next matching edge
-	for {
-		if it.first {
-			it.first = false
-			// Check current valid
-		} else {
-			it.valid = it.iter.Next()
-		}
-
-		if !it.valid {
-			return false
-		}
-
-		// If no filter, we are good
-		if len(it.labels) == 0 {
-			return true
-		}
-
-		// Check Label
-		// Key: ... [LabelLen] [Label] [TargetID]
-		// We need to decode label to check it.
-		// Optimization: We could check bytes if we encoded labels?
-		// But decoding is robust.
-		// We reuse Edge() logic or partial decode?
-		// Let's decode label from Key.
-		key := it.iter.Key()
-		// Format: [Prefix(1)] + [ID(16)] + [Len(2)] + [Label(N)] + [ID(16)]
-		if len(key) < 19 {
-			// Invalid key, skip or error?
-			// If invalid, Edge() will error. Let's return true and let Edge() handle error.
-			return true
-		}
-		offset := 17
-		label, n := encoding.DecodeLabel(key[offset:])
-		if n == 0 {
-			return true // Let Edge() error
-		}
-
-		match := false
-		for _, l := range it.labels {
-			if l == label {
-				match = true
-				break
-			}
-		}
-		if match {
-			return true
-		}
-		// Loop again
+	if it.first {
+		it.first = false
+		return it.valid
 	}
+	it.valid = it.iter.Next()
+	return it.valid
 }
 
 func (it *edgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
@@ -200,6 +155,90 @@ func (it *edgeIterator) Value() []byte          { return it.iter.Value() }
 func (it *edgeIterator) Valid() bool            { return it.valid }
 func (it *edgeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
 func (it *edgeIterator) Path() Path             { return it.iter.Path() }
+
+// multiEdgeIterator consumes exact, disjoint label ranges one at a time. Only
+// one Pebble iterator is open at once, even when many labels are requested.
+type multiEdgeIterator struct {
+	tx       *Tx
+	prefixes [][]byte
+	next     int
+	current  EdgeIterator
+	valid    bool
+	err      error
+}
+
+func newMultiEdgeIterator(tx *Tx, prefixes [][]byte) *multiEdgeIterator {
+	return &multiEdgeIterator{tx: tx, prefixes: prefixes}
+}
+
+func (it *multiEdgeIterator) Next() bool {
+	it.valid = false
+	for it.err == nil {
+		if it.current == nil {
+			if it.next >= len(it.prefixes) {
+				return false
+			}
+			it.current = it.tx.edgeRange(it.prefixes[it.next])
+			it.next++
+		}
+		if it.current.Next() {
+			it.valid = true
+			return true
+		}
+		it.err = it.current.Error()
+		it.err = errors.Join(it.err, it.current.Close())
+		it.current = nil
+	}
+	return false
+}
+
+func (it *multiEdgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
+	if it.current == nil {
+		return uuid.Nil, uuid.Nil, "", it.Error()
+	}
+	return it.current.Edge()
+}
+
+func (it *multiEdgeIterator) Close() error {
+	it.valid = false
+	if it.current == nil {
+		return nil
+	}
+	err := it.current.Close()
+	it.current = nil
+	return err
+}
+
+func (it *multiEdgeIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	if it.current != nil {
+		return it.current.Error()
+	}
+	return nil
+}
+
+func (it *multiEdgeIterator) Key() []byte {
+	if it.current == nil {
+		return nil
+	}
+	return it.current.Key()
+}
+func (it *multiEdgeIterator) Value() []byte {
+	if it.current == nil {
+		return nil
+	}
+	return it.current.Value()
+}
+func (it *multiEdgeIterator) Valid() bool        { return it.valid }
+func (it *multiEdgeIterator) SeekGE([]byte) bool { return false }
+func (it *multiEdgeIterator) Path() Path {
+	if it.current == nil {
+		return nil
+	}
+	return it.current.Path()
+}
 
 // nodeIterator implements NodeIterator using the generic Iterator.
 type nodeIterator struct {

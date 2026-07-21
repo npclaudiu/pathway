@@ -71,6 +71,32 @@ func EncodeEdgeInKey(srcID, dstID, edgeID uuid.UUID, label string) ([]byte, erro
 	return k, nil
 }
 
+// EncodeEdgeOutPrefix returns the exact key prefix shared by outgoing edges
+// from srcID with label.
+func EncodeEdgeOutPrefix(srcID uuid.UUID, label string) ([]byte, error) {
+	return encodeEdgeLabelPrefix(PrefixEdgeOut, srcID, label)
+}
+
+// EncodeEdgeInPrefix returns the exact key prefix shared by incoming edges to
+// dstID with label.
+func EncodeEdgeInPrefix(dstID uuid.UUID, label string) ([]byte, error) {
+	return encodeEdgeLabelPrefix(PrefixEdgeIn, dstID, label)
+}
+
+func encodeEdgeLabelPrefix(prefix byte, anchorID uuid.UUID, label string) ([]byte, error) {
+	labelBytes := []byte(label)
+	if len(labelBytes) > math.MaxUint16 {
+		return nil, ErrInvalidLabel
+	}
+
+	key := make([]byte, 1+16+2+len(labelBytes))
+	key[0] = prefix
+	copy(key[1:], anchorID[:])
+	binary.BigEndian.PutUint16(key[17:], uint16(len(labelBytes)))
+	copy(key[19:], labelBytes)
+	return key, nil
+}
+
 // EncodeDiff returns the bytes for EdgeID
 func EncodeEdgeValue(edgeID uuid.UUID) []byte {
 	v := make([]byte, 16)

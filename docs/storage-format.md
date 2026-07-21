@@ -48,6 +48,12 @@ semantics: edges with identical endpoints and labels remain distinct. The
 reverse record lets `DeleteEdge` find and remove both adjacency records and the
 edge's properties with bounded point operations.
 
+Adjacency keys are ordered by anchor UUID, encoded label, other endpoint UUID,
+then edge UUID. Because the encoded label begins with its `u16` byte length,
+label order is byte length first and label bytes second. An exact label prefix
+therefore forms one contiguous Pebble range; multi-label reads consume those
+disjoint ranges in encoded-prefix order.
+
 ## Property indexes
 
 Each configured node label/property pair receives exact-match index entries:

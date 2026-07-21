@@ -599,7 +599,7 @@ type TraversalPipeline struct {
 ```
 
 <a name="TraversalPipeline.Emit"></a>
-### func \(\*TraversalPipeline\) [Emit](<https://github.com/npclaudiu/pathway/blob/main/query.go#L225>)
+### func \(\*TraversalPipeline\) [Emit](<https://github.com/npclaudiu/pathway/blob/main/query.go#L229>)
 
 ```go
 func (tp *TraversalPipeline) Emit() *TraversalPipeline
@@ -608,7 +608,7 @@ func (tp *TraversalPipeline) Emit() *TraversalPipeline
 Emit causes the Repeat loop to emit the current element at each iteration, effectively returning intermediate results as well as the final results.
 
 <a name="TraversalPipeline.HasLabel"></a>
-### func \(\*TraversalPipeline\) [HasLabel](<https://github.com/npclaudiu/pathway/blob/main/query.go#L150>)
+### func \(\*TraversalPipeline\) [HasLabel](<https://github.com/npclaudiu/pathway/blob/main/query.go#L154>)
 
 ```go
 func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline
@@ -617,7 +617,7 @@ func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline
 HasLabel filters the current stream of elements, keeping only those with the specified label\(s\).
 
 <a name="TraversalPipeline.IDs"></a>
-### func \(\*TraversalPipeline\) [IDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L253>)
+### func \(\*TraversalPipeline\) [IDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L257>)
 
 ```go
 func (tp *TraversalPipeline) IDs() *TraversalPipeline
@@ -626,13 +626,13 @@ func (tp *TraversalPipeline) IDs() *TraversalPipeline
 IDs projects UUIDs from the current node stream. Unlike materializing nodes with ToList, this projection does not load node labels.
 
 <a name="TraversalPipeline.In"></a>
-### func \(\*TraversalPipeline\) [In](<https://github.com/npclaudiu/pathway/blob/main/query.go#L138>)
+### func \(\*TraversalPipeline\) [In](<https://github.com/npclaudiu/pathway/blob/main/query.go#L142>)
 
 ```go
 func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline
 ```
 
-In moves to incoming neighbor nodes, optionally filtering by edge label.
+In moves to incoming neighbor nodes, optionally filtering by edge label. Label filters use exact storage ranges. Multiple labels are deduplicated and returned in adjacency\-key order, independently of argument order.
 
 Usage:
 
@@ -641,13 +641,13 @@ g.V().In("EMPLOYED_BY")...
 ```
 
 <a name="TraversalPipeline.Out"></a>
-### func \(\*TraversalPipeline\) [Out](<https://github.com/npclaudiu/pathway/blob/main/query.go#L109>)
+### func \(\*TraversalPipeline\) [Out](<https://github.com/npclaudiu/pathway/blob/main/query.go#L111>)
 
 ```go
 func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline
 ```
 
-Out moves to outgoing neighbor nodes, optionally filtering by edge label.
+Out moves to outgoing neighbor nodes, optionally filtering by edge label. Label filters use exact storage ranges. Multiple labels are deduplicated and returned in adjacency\-key order, independently of argument order.
 
 Usage:
 
@@ -656,7 +656,7 @@ g.V().Out("KNOWS")...
 ```
 
 <a name="TraversalPipeline.Path"></a>
-### func \(\*TraversalPipeline\) [Path](<https://github.com/npclaudiu/pathway/blob/main/query.go#L237>)
+### func \(\*TraversalPipeline\) [Path](<https://github.com/npclaudiu/pathway/blob/main/query.go#L241>)
 
 ```go
 func (tp *TraversalPipeline) Path() *TraversalPipeline
@@ -669,7 +669,7 @@ g.V().Out().Path()
 ```
 
 <a name="TraversalPipeline.Repeat"></a>
-### func \(\*TraversalPipeline\) [Repeat](<https://github.com/npclaudiu/pathway/blob/main/query.go#L194>)
+### func \(\*TraversalPipeline\) [Repeat](<https://github.com/npclaudiu/pathway/blob/main/query.go#L198>)
 
 ```go
 func (tp *TraversalPipeline) Repeat(sub func(*TraversalPipeline) *TraversalPipeline) *TraversalPipeline
@@ -685,7 +685,7 @@ g.V().Repeat(func(t *TraversalPipeline) { return t.Out("KNOWS") }).Times(2)
 ```
 
 <a name="TraversalPipeline.Times"></a>
-### func \(\*TraversalPipeline\) [Times](<https://github.com/npclaudiu/pathway/blob/main/query.go#L216>)
+### func \(\*TraversalPipeline\) [Times](<https://github.com/npclaudiu/pathway/blob/main/query.go#L220>)
 
 ```go
 func (tp *TraversalPipeline) Times(n int) *TraversalPipeline
@@ -694,7 +694,7 @@ func (tp *TraversalPipeline) Times(n int) *TraversalPipeline
 Times terminates a Repeat loop after a fixed number of iterations.
 
 <a name="TraversalPipeline.ToList"></a>
-### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L276>)
+### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L280>)
 
 ```go
 func (tp *TraversalPipeline) ToList() (results []interface{}, err error)
@@ -703,7 +703,7 @@ func (tp *TraversalPipeline) ToList() (results []interface{}, err error)
 ToList executes the traversal pipeline and returns the results as a list. This triggers the actual database transaction.
 
 <a name="TraversalPipeline.Until"></a>
-### func \(\*TraversalPipeline\) [Until](<https://github.com/npclaudiu/pathway/blob/main/query.go#L204>)
+### func \(\*TraversalPipeline\) [Until](<https://github.com/npclaudiu/pathway/blob/main/query.go#L208>)
 
 ```go
 func (tp *TraversalPipeline) Until(pred Predicate) *TraversalPipeline
@@ -712,7 +712,7 @@ func (tp *TraversalPipeline) Until(pred Predicate) *TraversalPipeline
 Until terminates a Repeat loop when the predicate is true for the current element.
 
 <a name="TraversalPipeline.Values"></a>
-### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L264>)
+### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L268>)
 
 ```go
 func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline
@@ -766,7 +766,7 @@ g.V().HasLabel("Person")...
 ```
 
 <a name="Tx"></a>
-## type [Tx](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L16-L24>)
+## type [Tx](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L17-L25>)
 
 Tx represents a database transaction. It can be either read\-only \(created via View\) or read\-write \(created via Update\).
 
@@ -777,7 +777,7 @@ type Tx struct {
 ```
 
 <a name="Tx.Access"></a>
-### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L114>)
+### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L115>)
 
 ```go
 func (tx *Tx) Access(fn func(tx *Tx) error) error
@@ -786,7 +786,7 @@ func (tx *Tx) Access(fn func(tx *Tx) error) error
 Access allows executing a function within the transaction context. Useful for executing multiple operations on the same transaction \(e.g. Iterators\).
 
 <a name="Tx.Close"></a>
-### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L122>)
+### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L123>)
 
 ```go
 func (tx *Tx) Close() error
@@ -795,7 +795,7 @@ func (tx *Tx) Close() error
 Close closes the transaction. This releases the underlying snapshot. For write transactions \(Update\), it's a no\-op as the batch is managed by the DB.Update method, but for read\-only \(View/NewReadTx\), it releases the read lease.
 
 <a name="Tx.Delete"></a>
-### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L105>)
+### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L106>)
 
 ```go
 func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
@@ -804,7 +804,7 @@ func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
 Delete deletes the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.DeleteEdge"></a>
-### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L420>)
+### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L421>)
 
 ```go
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
@@ -813,7 +813,7 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
 DeleteEdge removes a specific edge, including both adjacency records, its reverse\-index record, and its properties.
 
 <a name="Tx.DeleteNode"></a>
-### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L349>)
+### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L350>)
 
 ```go
 func (tx *Tx) DeleteNode(id uuid.UUID) error
@@ -822,7 +822,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error
 DeleteNode deletes a node and all its incident edges \(both outgoing and incoming\), including each edge's reverse\-index entry and properties. Its cost is linear in the node's degree.
 
 <a name="Tx.FindNodes"></a>
-### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L571>)
+### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L589>)
 
 ```go
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator
@@ -831,7 +831,7 @@ func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterat
 FindNodes performs an exact typed lookup in a node\-property index configured through Options.Indexes. An unindexed label/property pair returns no results. String, numeric, and boolean values are distinct; value prefixes do not match. The iterator reports an encoding error if label or propKey exceeds 65,535 bytes.
 
 <a name="Tx.Get"></a>
-### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L66>)
+### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L67>)
 
 ```go
 func (tx *Tx) Get(key []byte) ([]byte, error)
@@ -840,7 +840,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error)
 Get retrieves the raw value for a given key. It handles the difference between read\-only readers and write batches.
 
 <a name="Tx.GetNode"></a>
-### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L486>)
+### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L487>)
 
 ```go
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
@@ -849,7 +849,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
 GetNode retrieves a node's label by its ID. Returns the label, a boolean indicating existence, and any error.
 
 <a name="Tx.GetProperties"></a>
-### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L502>)
+### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L503>)
 
 ```go
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
@@ -858,13 +858,13 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
 GetProperties retrieves the properties map for a given node or edge ID. Returns nil if no properties exist.
 
 <a name="Tx.InEdges"></a>
-### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L547>)
+### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L536>)
 
 ```go
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator
 ```
 
-InEdges returns an iterator for incoming edges to the given node ID. Optionally filters by edge labels.
+InEdges returns incoming edges to id. When labels are provided, each unique label is read through an exact Pebble range. Results use adjacency\-key order, independently of the order in which labels are supplied.
 
 <a name="Tx.Load"></a>
 ### func \(\*Tx\) [Load](<https://github.com/npclaudiu/pathway/blob/main/ogm.go#L12>)
@@ -876,7 +876,7 @@ func (tx *Tx) Load(id uuid.UUID, dest interface{}) error
 Load populates the destination struct with properties from the node/edge with the given ID. dest must be a pointer to a struct.
 
 <a name="Tx.NewIterator"></a>
-### func \(\*Tx\) [NewIterator](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L46>)
+### func \(\*Tx\) [NewIterator](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L47>)
 
 ```go
 func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
@@ -885,13 +885,13 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
 NewIterator creates a new low\-level iterator for the transaction. This is primarily for internal use; users should typically use high\-level iterators like ScanNodes, OutEdges, etc.
 
 <a name="Tx.OutEdges"></a>
-### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L522>)
+### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L524>)
 
 ```go
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator
 ```
 
-OutEdges returns an iterator for outgoing edges from the given node ID. Optionally filters by edge labels.
+OutEdges returns outgoing edges from id. When labels are provided, each unique label is read through an exact Pebble range. Results use adjacency\-key order, independently of the order in which labels are supplied.
 
 Usage:
 
@@ -902,7 +902,7 @@ for iter.Next() { ... }
 ```
 
 <a name="Tx.PutEdge"></a>
-### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L205>)
+### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L206>)
 
 ```go
 func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error)
@@ -919,7 +919,7 @@ edgeID, err := tx.PutEdge(srcID, dstID, "KNOWS")
 ```
 
 <a name="Tx.PutNode"></a>
-### func \(\*Tx\) [PutNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L140>)
+### func \(\*Tx\) [PutNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L141>)
 
 ```go
 func (tx *Tx) PutNode(id uuid.UUID, label string) error
@@ -935,7 +935,7 @@ err := tx.PutNode(id, "Person")
 ```
 
 <a name="Tx.ScanNodes"></a>
-### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L592>)
+### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L610>)
 
 ```go
 func (tx *Tx) ScanNodes() NodeIterator
@@ -944,7 +944,7 @@ func (tx *Tx) ScanNodes() NodeIterator
 ScanNodes scans all nodes in the database. This is a full table scan and can be slow for large datasets.
 
 <a name="Tx.Set"></a>
-### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L96>)
+### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L97>)
 
 ```go
 func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
@@ -953,7 +953,7 @@ func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
 Set sets the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.SetProperties"></a>
-### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L272>)
+### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L273>)
 
 ```go
 func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error

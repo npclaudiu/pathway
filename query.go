@@ -102,6 +102,8 @@ type TraversalPipeline struct {
 // Navigation Steps
 
 // Out moves to outgoing neighbor nodes, optionally filtering by edge label.
+// Label filters use exact storage ranges. Multiple labels are deduplicated and
+// returned in adjacency-key order, independently of argument order.
 //
 // Usage:
 //
@@ -131,6 +133,8 @@ func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline {
 }
 
 // In moves to incoming neighbor nodes, optionally filtering by edge label.
+// Label filters use exact storage ranges. Multiple labels are deduplicated and
+// returned in adjacency-key order, independently of argument order.
 //
 // Usage:
 //

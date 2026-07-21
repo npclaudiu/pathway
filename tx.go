@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/google/uuid"
@@ -511,8 +512,9 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 	return properties.UnmarshalProperties(val)
 }
 
-// OutEdges returns an iterator for outgoing edges from the given node ID.
-// Optionally filters by edge labels.
+// OutEdges returns outgoing edges from id. When labels are provided, each
+// unique label is read through an exact Pebble range. Results use adjacency-key
+// order, independently of the order in which labels are supplied.
 //
 // Usage:
 //
@@ -520,47 +522,63 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 //	defer iter.Close()
 //	for iter.Next() { ... }
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator {
-	// Prefix: 0x02 + id
-	prefix := make([]byte, 1+16)
-	prefix[0] = encoding.PrefixEdgeOut
-	copy(prefix[1:], id[:])
-
-	opts := &pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: keyUpperBound(prefix),
-	}
-
-	iter, err := tx.NewIterator(opts)
-	if err != nil {
-		return &edgeIterator{iter: newErrorIterator(err), err: err}
-	}
-
-	// Seek to first key
-	iter.SeekGE(prefix)
-
-	// Wrap in edge implementation
-	return &edgeIterator{iter: iter, valid: iter.Valid(), first: true, labels: labels}
+	basePrefix := make([]byte, 1+16)
+	basePrefix[0] = encoding.PrefixEdgeOut
+	copy(basePrefix[1:], id[:])
+	return tx.edgesByLabel(basePrefix, labels, func(label string) ([]byte, error) {
+		return encoding.EncodeEdgeOutPrefix(id, label)
+	})
 }
 
-// InEdges returns an iterator for incoming edges to the given node ID.
-// Optionally filters by edge labels.
+// InEdges returns incoming edges to id. When labels are provided, each unique
+// label is read through an exact Pebble range. Results use adjacency-key order,
+// independently of the order in which labels are supplied.
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator {
-	prefix := make([]byte, 1+16)
-	prefix[0] = encoding.PrefixEdgeIn
-	copy(prefix[1:], id[:])
+	basePrefix := make([]byte, 1+16)
+	basePrefix[0] = encoding.PrefixEdgeIn
+	copy(basePrefix[1:], id[:])
+	return tx.edgesByLabel(basePrefix, labels, func(label string) ([]byte, error) {
+		return encoding.EncodeEdgeInPrefix(id, label)
+	})
+}
 
+func (tx *Tx) edgesByLabel(basePrefix []byte, labels []string, encodePrefix func(string) ([]byte, error)) EdgeIterator {
+	if len(labels) == 0 {
+		return tx.edgeRange(basePrefix)
+	}
+
+	prefixes := make([][]byte, 0, len(labels))
+	for _, label := range labels {
+		prefix, err := encodePrefix(label)
+		if err != nil {
+			return &edgeIterator{iter: newErrorIterator(err), err: err}
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	slices.SortFunc(prefixes, bytes.Compare)
+	unique := prefixes[:0]
+	for _, prefix := range prefixes {
+		if len(unique) == 0 || !bytes.Equal(unique[len(unique)-1], prefix) {
+			unique = append(unique, prefix)
+		}
+	}
+	if len(unique) == 1 {
+		return tx.edgeRange(unique[0])
+	}
+	return newMultiEdgeIterator(tx, unique)
+}
+
+func (tx *Tx) edgeRange(prefix []byte) EdgeIterator {
 	opts := &pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: keyUpperBound(prefix),
 	}
-
 	iter, err := tx.NewIterator(opts)
 	if err != nil {
 		return &edgeIterator{iter: newErrorIterator(err), err: err}
 	}
 	iter.SeekGE(prefix)
-
-	return &edgeIterator{iter: iter, valid: iter.Valid(), first: true, labels: labels}
+	return &edgeIterator{iter: iter, valid: iter.Valid(), first: true}
 }
 
 // FindNodes performs an exact typed lookup in a node-property index configured

@@ -16,7 +16,7 @@ Run focused suites:
 
 ```bash
 go test ./benchmarks -run '^$' -bench 'Benchmark(GetNode|ScanNodes|FindNodes)$' -benchmem -count 5
-go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|TraverseOutHighDegree|BFS_2Hop)$' -benchmem -count 5
+go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|TraverseOutHighDegree|TraverseOutByLabelHighDegree|BFS_2Hop)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge|BulkInsertEdge_100|InsertEdgeLargeEndpointLabels)$' -benchmem -count 5
 ```
 
@@ -31,6 +31,12 @@ compares `IDs` against normal label-bearing node materialization. The `IDs`
 case covers the adjacency-only neighbor path; the `Labels` case tracks the
 remaining lazy point-read cost when labels are requested. Both cases validate
 the complete result count before timing.
+
+`BenchmarkTraverseOutByLabelHighDegree` builds 5,012 outgoing edges: 5,000
+common, 5 rare, and 7 under a second rare label. Its `All`, `SingleRare`, and
+`MultipleRare` cases show whether exact label bounds avoid work proportional to
+unrelated degree. The filtered cases use `IDs` so node-label reads do not hide
+the adjacency-range cost.
 
 The shared benchmark fixture explicitly configures `Person/name` and
 `Person/age` indexes. This keeps `BenchmarkFindNodes` an indexed lookup while

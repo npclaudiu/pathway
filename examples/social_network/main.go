@@ -59,7 +59,9 @@ func run() error {
 	}
 
 	g := pathway.NewTraversalSource(db)
-	ids, err := g.V(alice.String()).Out("FOLLOWS").IDs().ToList()
+	// Each requested edge label is an exact adjacency range. Multi-label results
+	// retain deterministic storage-key order rather than argument order.
+	ids, err := g.V(alice.String()).Out("MENTORS", "FOLLOWS").IDs().ToList()
 	if err != nil {
 		return err
 	}

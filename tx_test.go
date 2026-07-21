@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -161,6 +162,135 @@ func TestTx_PutEdge_AllowsParallelEdges(t *testing.T) {
 		}
 		if !got[firstID] || !got[secondID] || len(got) != 2 {
 			t.Fatalf("expected both parallel edges, got %v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTx_EdgeLabelFiltersUseAdjacencyOrder(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	ctx := context.Background()
+	hub := uuid.MustParse("00000000-0000-0000-0000-000000000010")
+	nodes := []uuid.UUID{
+		uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000002"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000003"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000004"),
+	}
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.PutNode(hub, "Hub"); err != nil {
+			return err
+		}
+		for _, id := range nodes {
+			if err := tx.PutNode(id, "Node"); err != nil {
+				return err
+			}
+		}
+		for _, edge := range []struct {
+			src, dst uuid.UUID
+			label    string
+		}{
+			{hub, nodes[0], "aa"},
+			{hub, nodes[1], "z"},
+			{hub, nodes[2], "unrelated"},
+			{hub, nodes[3], "z"},
+			{nodes[0], hub, "aa"},
+			{nodes[1], hub, "z"},
+			{nodes[2], hub, "unrelated"},
+			{nodes[3], hub, "z"},
+		} {
+			if _, err := tx.PutEdge(edge.src, edge.dst, edge.label); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type edgeResult struct {
+		id, other uuid.UUID
+		label     string
+	}
+	collect := func(iter EdgeIterator) []edgeResult {
+		t.Helper()
+		defer closeTestResource(t, iter)
+		var results []edgeResult
+		for iter.Next() {
+			id, other, label, err := iter.Edge()
+			if err != nil {
+				t.Fatal(err)
+			}
+			results = append(results, edgeResult{id: id, other: other, label: label})
+		}
+		if err := iter.Error(); err != nil {
+			t.Fatal(err)
+		}
+		return results
+	}
+	restrict := func(all []edgeResult, labels ...string) []edgeResult {
+		allowed := make(map[string]bool, len(labels))
+		for _, label := range labels {
+			allowed[label] = true
+		}
+		var results []edgeResult
+		for _, edge := range all {
+			if allowed[edge.label] {
+				results = append(results, edge)
+			}
+		}
+		return results
+	}
+
+	if err := db.View(ctx, func(tx *Tx) error {
+		for name, get := range map[string]func(...string) EdgeIterator{
+			"outgoing": func(labels ...string) EdgeIterator { return tx.OutEdges(hub, labels...) },
+			"incoming": func(labels ...string) EdgeIterator { return tx.InEdges(hub, labels...) },
+		} {
+			t.Run(name, func(t *testing.T) {
+				all := collect(get())
+				wantSingle := restrict(all, "z")
+				if got := collect(get("z")); !reflect.DeepEqual(got, wantSingle) {
+					t.Fatalf("single-label results = %#v, want %#v", got, wantSingle)
+				}
+				wantMultiple := restrict(all, "aa", "z")
+				if got := collect(get("aa", "z", "aa")); !reflect.DeepEqual(got, wantMultiple) {
+					t.Fatalf("multi-label results = %#v, want %#v", got, wantMultiple)
+				}
+				if got := collect(get("z", "aa")); !reflect.DeepEqual(got, wantMultiple) {
+					t.Fatalf("caller label order changed results: %#v", got)
+				}
+			})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTx_EdgeLabelFilterRejectsOversizedLabel(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	if err := db.View(context.Background(), func(tx *Tx) error {
+		label := strings.Repeat("x", 65536)
+		for _, iter := range []EdgeIterator{tx.OutEdges(uuid.New(), label), tx.InEdges(uuid.New(), label)} {
+			if iter.Next() {
+				t.Fatal("invalid label iterator advanced")
+			}
+			if !errors.Is(iter.Error(), encoding.ErrInvalidLabel) {
+				t.Fatalf("iterator error = %v", iter.Error())
+			}
+			closeTestResource(t, iter)
 		}
 		return nil
 	}); err != nil {
