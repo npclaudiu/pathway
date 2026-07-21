@@ -226,11 +226,14 @@ func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 	if !exists {
 		return uuid.Nil, ErrDanglingEdge
 	}
+	return tx.putEdge(srcID, dstID, label)
+}
 
-	// 2. Generate Edge ID
+// putEdge stages an edge after its callers have validated both endpoints. Keep
+// this package-private so the public API cannot bypass dangling-edge checks.
+func (tx *Tx) putEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 	edgeID := uuid.New()
 
-	// 3. Encoder keys
 	outKey, err := encoding.EncodeEdgeOutKey(srcID, dstID, edgeID, label)
 	if err != nil {
 		return uuid.Nil, err
@@ -247,7 +250,6 @@ func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 		return uuid.Nil, err
 	}
 
-	// 4. Write to Batch
 	if err := tx.batch.Set(outKey, val, nil); err != nil {
 		return uuid.Nil, err
 	}

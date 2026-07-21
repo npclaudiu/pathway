@@ -36,14 +36,14 @@ func BenchmarkBatchInsertNode_100(b *testing.B) {
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			err := db.Update(ctx, func(tx *pathway.Tx) error {
+			err := db.BulkUpdate(ctx, func(writer *pathway.BulkWriter) error {
 				for j := 0; j < batchSize; j++ {
 					id := uuid.New()
-					err := tx.PutNode(id, "Benchmark")
+					err := writer.PutNode(id, "Benchmark")
 					if err != nil {
 						return err
 					}
-					err = tx.SetProperties(id, map[string]interface{}{
+					err = writer.SetProperties(id, map[string]interface{}{
 						"batch": i,
 					})
 					if err != nil {
@@ -54,6 +54,32 @@ func BenchmarkBatchInsertNode_100(b *testing.B) {
 			})
 			if err != nil {
 				b.Fatalf("failed to batch insert: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkBulkInsertEdge_100(b *testing.B) {
+	const batchSize = 100
+	RunWriteBenchmark(b, func(b *testing.B, db *pathway.Database) {
+		nodes := GenerateRandomGraph(b, db, 2, 0)
+		if len(nodes) < 2 {
+			b.Fatal("not enough nodes generated")
+		}
+		ctx := b.Context()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			err := db.BulkUpdate(ctx, func(writer *pathway.BulkWriter) error {
+				for j := 0; j < batchSize; j++ {
+					if _, err := writer.PutEdge(nodes[0], nodes[1], "BENCH_EDGE"); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				b.Fatalf("failed to bulk insert edges: %v", err)
 			}
 		}
 	})

@@ -133,6 +133,30 @@ writes in process memory, so a process or machine crash can lose successful
 updates. Schema migrations and index-definition changes always use synced
 commits.
 
+### Bulk ingestion
+
+Use `BulkUpdate` to make high-throughput graph loading explicit:
+
+```go
+err := db.BulkUpdate(ctx, func(writer *pathway.BulkWriter) error {
+	if err := writer.PutNode(alice, "User"); err != nil {
+		return err
+	}
+	if err := writer.PutNode(bob, "User"); err != nil {
+		return err
+	}
+	_, err := writer.PutEdge(alice, bob, "FOLLOWS")
+	return err
+})
+```
+
+All nodes, edges, and properties staged by the callback commit once and
+atomically using the database's configured durability. Any writer-operation or
+callback error rolls back the entire batch—even if a writer error is
+accidentally ignored. Within one callback, Pathway caches node-existence checks,
+so many edges sharing endpoints do not repeatedly read the same node records.
+The writer is valid only during its callback and is not safe for concurrent use.
+
 ### Fluid Query Capabilities
 
 Pathway currently supports these Gremlin-inspired traversal steps:

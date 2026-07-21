@@ -68,24 +68,26 @@ Pathway is schema-less, but conceptually we will model:
 
 ## 3. Seeding Data
 
-We use `db.Update` for write transactions.
+We use `db.BulkUpdate` to seed the graph in one atomic commit. Its writer caches
+edge endpoint validation, which is especially useful when many imported edges
+share nodes.
 
 ```go
 func seedData(ctx context.Context, db *pathway.Database) (map[string]uuid.UUID, map[string]uuid.UUID, error) {
     users := make(map[string]uuid.UUID)
     posts := make(map[string]uuid.UUID)
 
-    err := db.Update(ctx, func(tx *pathway.Tx) error {
+    err := db.BulkUpdate(ctx, func(writer *pathway.BulkWriter) error {
         // 1. Create Users
         names := []string{"Alice", "Bob", "Charlie", "Dave", "Eve"}
         for _, name := range names {
             id := uuid.New()
             users[name] = id
             
-            if err := tx.PutNode(id, "User"); err != nil {
+            if err := writer.PutNode(id, "User"); err != nil {
                 return err
             }
-            if err := tx.SetProperties(id, map[string]any{
+            if err := writer.SetProperties(id, map[string]any{
                 "username": name,
                 "age":      25,
             }); err != nil {
@@ -96,19 +98,19 @@ func seedData(ctx context.Context, db *pathway.Database) (map[string]uuid.UUID, 
         // 2. Create Posts
         post1 := uuid.New()
         posts["AliceIntro"] = post1
-        if err := tx.PutNode(post1, "Post"); err != nil {
+        if err := writer.PutNode(post1, "Post"); err != nil {
             return err
         }
-        if err := tx.SetProperties(post1, map[string]any{"content": "Hello World"}); err != nil {
+        if err := writer.SetProperties(post1, map[string]any{"content": "Hello World"}); err != nil {
             return err
         }
 
         post2 := uuid.New()
         posts["BobUpdate"] = post2
-        if err := tx.PutNode(post2, "Post"); err != nil {
+        if err := writer.PutNode(post2, "Post"); err != nil {
             return err
         }
-        if err := tx.SetProperties(post2, map[string]any{"content": "Bob is here"}); err != nil {
+        if err := writer.SetProperties(post2, map[string]any{"content": "Bob is here"}); err != nil {
             return err
         }
 
@@ -124,7 +126,7 @@ func seedData(ctx context.Context, db *pathway.Database) (map[string]uuid.UUID, 
             {users["Bob"], posts["AliceIntro"], "LIKED"},
         }
         for _, edge := range edges {
-            if _, err := tx.PutEdge(edge.from, edge.to, edge.label); err != nil {
+            if _, err := writer.PutEdge(edge.from, edge.to, edge.label); err != nil {
                 return err
             }
         }
@@ -135,6 +137,11 @@ func seedData(ctx context.Context, db *pathway.Database) (map[string]uuid.UUID, 
     return users, posts, err
 }
 ```
+
+`BulkUpdate` uses the configured durability mode and commits exactly once. Any
+callback or writer-operation error aborts the complete batch. `BulkWriter`
+remembers its first operation error, so accidentally ignoring one cannot commit
+the operations staged before it.
 
 ## 4. Querying
 

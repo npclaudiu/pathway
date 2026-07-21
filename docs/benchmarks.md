@@ -17,7 +17,7 @@ Run focused suites:
 ```bash
 go test ./benchmarks -run '^$' -bench 'Benchmark(GetNode|ScanNodes|FindNodes)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|BFS_2Hop)$' -benchmem -count 5
-go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge)$' -benchmem -count 5
+go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge|BulkInsertEdge_100)$' -benchmem -count 5
 ```
 
 `BenchmarkScanNodes` measures a full node scan. `BenchmarkFindNodes` separately
@@ -38,6 +38,12 @@ the usual `Memory` and `Disk` backends. For example,
 The in-memory variants expose CPU and allocation differences but cannot measure
 storage durability. Never interpret the `NoSync` throughput as free: recent
 successful updates may be lost after a process or machine crash.
+
+`BenchmarkBatchInsertNode_100` uses `BulkUpdate` for node and property loading.
+`BenchmarkBulkInsertEdge_100` inserts 100 parallel edges between the same two
+nodes in one bulk callback, exercising the endpoint cache: each distinct
+endpoint is validated once per batch. Compare it with `BenchmarkInsertEdge` to
+separate batching and validation reuse from single-transaction latency.
 
 For before/after comparisons, capture both revisions and use `benchstat`:
 

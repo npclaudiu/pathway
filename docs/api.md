@@ -9,9 +9,14 @@ import "github.com/npclaudiu/pathway"
 ## Index
 
 - [Variables](<#variables>)
+- [type BulkWriter](<#BulkWriter>)
+  - [func \(w \*BulkWriter\) PutEdge\(srcID, dstID uuid.UUID, label string\) \(uuid.UUID, error\)](<#BulkWriter.PutEdge>)
+  - [func \(w \*BulkWriter\) PutNode\(id uuid.UUID, label string\) error](<#BulkWriter.PutNode>)
+  - [func \(w \*BulkWriter\) SetProperties\(id uuid.UUID, props map\[string\]any\) error](<#BulkWriter.SetProperties>)
 - [type Database](<#Database>)
   - [func Open\(path string\) \(\*Database, error\)](<#Open>)
   - [func OpenWithOptions\(path string, opts Options\) \(\*Database, error\)](<#OpenWithOptions>)
+  - [func \(d \*Database\) BulkUpdate\(ctx context.Context, fn func\(writer \*BulkWriter\) error\) error](<#Database.BulkUpdate>)
   - [func \(d \*Database\) Close\(\) error](<#Database.Close>)
   - [func \(g \*Database\) Compact\(ctx context.Context\) error](<#Database.Compact>)
   - [func \(d \*Database\) NewReadTx\(ctx context.Context\) \(\*Tx, error\)](<#Database.NewReadTx>)
@@ -93,6 +98,44 @@ var (
 )
 ```
 
+<a name="BulkWriter"></a>
+## type [BulkWriter](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L14-L19>)
+
+BulkWriter stages graph insertions in one atomic Database.BulkUpdate. It caches node\-existence checks so edges that share endpoints do not repeatedly read and decode the same node records. A BulkWriter is valid only during its callback and must not be used concurrently.
+
+```go
+type BulkWriter struct {
+    // contains filtered or unexported fields
+}
+```
+
+<a name="BulkWriter.PutEdge"></a>
+### func \(\*BulkWriter\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L56>)
+
+```go
+func (w *BulkWriter) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error)
+```
+
+PutEdge stages a directed edge after validating its endpoints. Each distinct endpoint is read at most once during the bulk callback; nodes inserted through this writer require no additional endpoint read.
+
+<a name="BulkWriter.PutNode"></a>
+### func \(\*BulkWriter\) [PutNode](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L42>)
+
+```go
+func (w *BulkWriter) PutNode(id uuid.UUID, label string) error
+```
+
+PutNode stages a node upsert and makes the node immediately available to later PutEdge calls in the same bulk callback.
+
+<a name="BulkWriter.SetProperties"></a>
+### func \(\*BulkWriter\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L78>)
+
+```go
+func (w *BulkWriter) SetProperties(id uuid.UUID, props map[string]any) error
+```
+
+SetProperties completely replaces an existing node or edge's properties in the current bulk transaction.
+
 <a name="Database"></a>
 ## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L85-L91>)
 
@@ -131,6 +174,15 @@ func OpenWithOptions(path string, opts Options) (*Database, error)
 ```
 
 OpenWithOptions opens the database with specific options. In addition to logging, monitoring hooks, and Pebble settings, options configure write durability and persisted exact\-match node\-property indexes.
+
+<a name="Database.BulkUpdate"></a>
+### func \(\*Database\) [BulkUpdate](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L25>)
+
+```go
+func (d *Database) BulkUpdate(ctx context.Context, fn func(writer *BulkWriter) error) error
+```
+
+BulkUpdate stages nodes, edges, and properties in one transaction and commits them once with the database's configured durability. Any writer operation or callback error rolls back the complete batch, including errors the callback did not explicitly return.
 
 <a name="Database.Close"></a>
 ### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L155>)
@@ -742,7 +794,7 @@ func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
 Delete deletes the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.DeleteEdge"></a>
-### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L422>)
+### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L424>)
 
 ```go
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
@@ -751,7 +803,7 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
 DeleteEdge removes a specific edge, including both adjacency records, its reverse\-index record, and its properties.
 
 <a name="Tx.DeleteNode"></a>
-### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L351>)
+### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L353>)
 
 ```go
 func (tx *Tx) DeleteNode(id uuid.UUID) error
@@ -760,7 +812,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error
 DeleteNode deletes a node and all its incident edges \(both outgoing and incoming\), including each edge's reverse\-index entry and properties. Its cost is linear in the node's degree.
 
 <a name="Tx.FindNodes"></a>
-### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L551>)
+### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L553>)
 
 ```go
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator
@@ -778,7 +830,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error)
 Get retrieves the raw value for a given key. It handles the difference between read\-only readers and write batches.
 
 <a name="Tx.GetNode"></a>
-### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L466>)
+### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L468>)
 
 ```go
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
@@ -787,7 +839,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
 GetNode retrieves a node's label by its ID. Returns the label, a boolean indicating existence, and any error.
 
 <a name="Tx.GetProperties"></a>
-### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L482>)
+### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L484>)
 
 ```go
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
@@ -796,7 +848,7 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
 GetProperties retrieves the properties map for a given node or edge ID. Returns nil if no properties exist.
 
 <a name="Tx.InEdges"></a>
-### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L527>)
+### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L529>)
 
 ```go
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -823,7 +875,7 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
 NewIterator creates a new low\-level iterator for the transaction. This is primarily for internal use; users should typically use high\-level iterators like ScanNodes, OutEdges, etc.
 
 <a name="Tx.OutEdges"></a>
-### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L502>)
+### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L504>)
 
 ```go
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -873,7 +925,7 @@ err := tx.PutNode(id, "Person")
 ```
 
 <a name="Tx.ScanNodes"></a>
-### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L572>)
+### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L574>)
 
 ```go
 func (tx *Tx) ScanNodes() NodeIterator
@@ -891,7 +943,7 @@ func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
 Set sets the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.SetProperties"></a>
-### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L274>)
+### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L276>)
 
 ```go
 func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error

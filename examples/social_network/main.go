@@ -34,12 +34,12 @@ func run() error {
 	ctx := context.Background()
 	alice, bob := uuid.New(), uuid.New()
 	var followsID uuid.UUID
-	if err := db.Update(ctx, func(tx *pathway.Tx) error {
+	if err := db.BulkUpdate(ctx, func(writer *pathway.BulkWriter) error {
 		for id, name := range map[uuid.UUID]string{alice: "Alice", bob: "Bob"} {
-			if err := tx.PutNode(id, "User"); err != nil {
+			if err := writer.PutNode(id, "User"); err != nil {
 				return err
 			}
-			if err := tx.SetProperties(id, map[string]any{
+			if err := writer.SetProperties(id, map[string]any{
 				"name":   name,
 				"active": true,
 			}); err != nil {
@@ -47,11 +47,11 @@ func run() error {
 			}
 		}
 
-		followsID, err = tx.PutEdge(alice, bob, "FOLLOWS")
+		followsID, err = writer.PutEdge(alice, bob, "FOLLOWS")
 		if err != nil {
 			return err
 		}
-		return tx.SetProperties(followsID, map[string]any{"since": 2024})
+		return writer.SetProperties(followsID, map[string]any{"since": 2024})
 	}); err != nil {
 		return err
 	}

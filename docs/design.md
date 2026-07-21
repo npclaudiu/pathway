@@ -63,6 +63,7 @@ The main source files have intentionally coarse responsibilities:
 | File or package | Responsibility |
 |---|---|
 | `database.go` | Database lifecycle, options, managed read/write callbacks, compaction |
+| `bulk.go` | Atomic ingestion writer, sticky errors, and endpoint-validation cache |
 | `indexes.go` | Persisted index-definition reconciliation, rebuilds, and runtime lookup cache |
 | `tx.go` | Transaction abstraction, graph mutation algorithms, point reads, scan construction |
 | `schema.go` | Pathway schema marker, initialization, and supported migrations to v3 |
@@ -301,7 +302,27 @@ snapshot, so maintainers must not infer a stronger transaction model than
 Pebble's batch behavior.
 
 Single-record durable workloads pay a WAL sync per callback; grouping writes in
-one `Update` remains the primary bulk-ingestion optimization.
+one transaction remains the primary bulk-ingestion optimization.
+
+`Database.BulkUpdate` makes that optimization explicit. It constructs one
+`BulkWriter` inside a normal `Update`, so commit, rollback, durability,
+read-your-writes, indexes, and graph invariants remain shared with the ordinary
+transaction path. The writer exposes only `PutNode`, `PutEdge`, and
+`SetProperties`; it does not expose the unchecked edge insertion helper or raw
+Pebble operations.
+
+The writer stores the first operation error. After a failure, later calls return
+that error without staging more data, and `BulkUpdate` returns it even when the
+callback mistakenly returns `nil`. This prevents a partially successful import
+from committing. A callback error also aborts the batch. The writer is marked
+closed when the callback ends and is not safe for concurrent use.
+
+Its UUID-to-existence map avoids repeated node reads during edge-heavy imports.
+`PutNode` records the new node immediately, so a later edge to that node needs
+no endpoint read. For pre-existing nodes, the first `PutEdge` point-reads and
+decodes each distinct endpoint; later edges reuse the cached result. A
+package-private `Tx.putEdge` performs the three edge writes after either normal
+`Tx.PutEdge` validation or cached bulk validation. It must remain unexported.
 
 The context passed to `Update` is stored on `Tx` but is not checked by point
 reads, scans, or commit. Cancellation therefore does not currently interrupt a
@@ -360,6 +381,8 @@ old or new label.
 
 The endpoint checks are correctness reads and a current ingestion cost. Edge
 properties, if any, require a separate `SetProperties` call in the same update.
+`BulkWriter.PutEdge` instead validates each distinct endpoint once per bulk
+callback and then uses the same package-private edge write path.
 
 ### `SetProperties`
 
@@ -617,6 +640,7 @@ The principal costs and write amplification are architectural, not incidental:
 | Relabel node | node write; with relevant indexes, property read plus deletes/inserts for configured properties |
 | Set node properties | property encode/write; with indexes, old-property read/decode plus writes for changed configured values |
 | Create edge | two endpoint reads, three record writes |
+| Bulk-create edges | at most one endpoint read per distinct node in the callback, three record writes per edge |
 | Set edge properties | reverse-record existence read, property encode/write |
 | Delete edge | reverse point read, four deletes |
 | Delete node | property/index work, two adjacency scans, incident-edge UUID set, four deletes per edge |
@@ -636,7 +660,6 @@ Likely optimization directions must preserve invariants:
 - tighter adjacency bounds for label filters;
 - carrying neighbor labels or batching label reads to remove traversal N+1;
 - streaming terminal methods and caller contexts;
-- a first-class bulk-write API that builds on explicit durability;
 - a typed property codec that avoids protobuf/`structpb` hot-path conversions;
 - queue-head indexes and visited policies for repeat traversal.
 
@@ -730,7 +753,6 @@ workload before the timed region and compare multiple runs with `benchstat`.
 `IMPROVEMENTS.md` is the tracked roadmap. The most consequential remaining
 design issues are:
 
-- no first-class bulk-write API beyond grouping operations in `Update`;
 - traversal N+1 node and property reads;
 - mutable, dynamically typed pipelines and untyped normal node/edge results;
 - no context-aware or streaming terminal execution;
