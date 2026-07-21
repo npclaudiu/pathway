@@ -10,7 +10,7 @@ $(PROTOC_GEN_GO): tools/go.mod tools/go.sum tools/tools.go | $(LOCAL_BIN)
 	cd tools && go build -o $(PROTOC_GEN_GO) google.golang.org/protobuf/cmd/protoc-gen-go
 
 $(GOLANGCI_LINT): tools/go.mod tools/go.sum tools/tools.go | $(LOCAL_BIN)
-	cd tools && go build -o $(GOLANGCI_LINT) github.com/golangci/golangci-lint/cmd/golangci-lint
+	cd tools && go build -o $(GOLANGCI_LINT) github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 $(GOMARKDOC): tools/go.mod tools/go.sum tools/tools.go | $(LOCAL_BIN)
 	cd tools && go build -o $(GOMARKDOC) github.com/princjef/gomarkdoc/cmd/gomarkdoc

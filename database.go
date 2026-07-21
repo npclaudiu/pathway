@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/pebble"
-	"github.com/cockroachdb/pebble/vfs"
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
 // Logger defines a simple logging interface for internal database logs.
@@ -101,7 +101,7 @@ func (d *Database) Close() error {
 //	})
 func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error {
 	batch := d.db.NewIndexedBatch()
-	defer batch.Close()
+	defer func() { _ = batch.Close() }()
 
 	tx := &Tx{
 		db:       d,
@@ -131,7 +131,7 @@ func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error {
 //	})
 func (d *Database) View(ctx context.Context, fn func(tx *Tx) error) error {
 	snapshot := d.db.NewSnapshot()
-	defer snapshot.Close()
+	defer func() { _ = snapshot.Close() }()
 
 	tx := &Tx{
 		db:       d,
@@ -168,5 +168,5 @@ func (g *Database) Compact(ctx context.Context) error {
 	}
 	// Pebble's Compact compacts the specified range.
 	// Start and end are nil to indicate the full range.
-	return g.db.Compact(nil, nil, true)
+	return g.db.Compact(ctx, nil, nil, true)
 }

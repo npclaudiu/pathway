@@ -382,7 +382,10 @@ func (it *flatMapEdgeIterator) Next() bool {
 		if it.curIter.Next() {
 			return true
 		}
-		it.curIter.Close()
+		if err := it.curIter.Close(); err != nil {
+			it.err = err
+			return false
+		}
 		it.curIter = nil
 	}
 
@@ -426,10 +429,11 @@ func (it *flatMapEdgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 }
 
 func (it *flatMapEdgeIterator) Close() error {
+	var err error
 	if it.curIter != nil {
-		it.curIter.Close()
+		err = it.curIter.Close()
 	}
-	return it.prev.Close()
+	return errors.Join(err, it.prev.Close())
 }
 func (it *flatMapEdgeIterator) Error() error {
 	if it.err != nil {
@@ -651,7 +655,10 @@ func (it *repeatIterator) Next() bool {
 					})
 				}
 			}
-			iter.Close()
+			if err := iter.Close(); err != nil {
+				it.err = err
+				return false
+			}
 		}
 
 		if it.conf.emit {

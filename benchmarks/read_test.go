@@ -50,7 +50,7 @@ func BenchmarkFindNodes(b *testing.B) {
 			// Full scan using ScanNodes
 			err := db.View(ctx, func(tx *pathway.Tx) error {
 				iter := tx.ScanNodes()
-				defer iter.Close()
+				defer closeBenchmarkResource(b, iter)
 
 				for iter.Next() {
 					count++

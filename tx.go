@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/google/uuid"
 	"github.com/npclaudiu/pathway/internal/encoding"
 	"github.com/npclaudiu/pathway/internal/properties"
@@ -65,7 +65,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer closer.Close()
+		defer func() { _ = closer.Close() }()
 		// We must copy the value because closer.Close() invalidates it
 		// Pebble docs say: "The caller must close the returned Closer when finished with the result."
 		// We return []byte which might be used after this function returns.
@@ -81,7 +81,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 	result := make([]byte, len(val))
 	copy(result, val)
 	return result, nil
@@ -323,7 +323,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error {
 
 	// Outgoing
 	iterOut := tx.OutEdges(id) // This uses the Tx's reader (batch+db)
-	defer iterOut.Close()
+	defer func() { _ = iterOut.Close() }()
 	for iterOut.Next() {
 		_, target, label, _ := iterOut.Edge() // ignoring error for brevity in plan, but should handle
 
@@ -341,7 +341,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error {
 
 	// Incoming
 	iterIn := tx.InEdges(id)
-	defer iterIn.Close()
+	defer func() { _ = iterIn.Close() }()
 	for iterIn.Next() {
 		_, source, label, _ := iterIn.Edge() // note: Edge() signature returns target for Out, source for In?
 		// Our iterator wrapper unifies this, but EdgeIterator.Edge() returns (edgeID, otherNodeID, label).

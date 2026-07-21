@@ -3,7 +3,7 @@ package pathway
 import (
 	"context"
 
-	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // Snapshot represents a read‑only view of the database at a point in time.
@@ -28,8 +28,7 @@ func (s *Snapshot) Close() error {
 	if s == nil || s.snap == nil {
 		return nil
 	}
-	s.snap.Close()
-	return nil
+	return s.snap.Close()
 }
 
 // Get returns a Pebble reader that can be used to read keys from the snapshot.
@@ -44,7 +43,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 	// Must copy
 	ret := make([]byte, len(val))
 	copy(ret, val)

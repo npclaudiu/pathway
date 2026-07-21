@@ -246,7 +246,7 @@ func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
 
 // ToList executes the traversal pipeline and returns the results as a list.
 // This triggers the actual database transaction.
-func (tp *TraversalPipeline) ToList() ([]interface{}, error) {
+func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
 	if tp.db == nil {
 		return nil, ErrInvalidDatabase
 	}
@@ -262,7 +262,6 @@ func (tp *TraversalPipeline) ToList() ([]interface{}, error) {
 	}
 	start := time.Now()
 
-	var err error
 	defer func() {
 		if tp.db.options.OnQueryEnd != nil {
 			tp.db.options.OnQueryEnd(ctx, queryDesc, time.Since(start), err)
@@ -276,7 +275,7 @@ func (tp *TraversalPipeline) ToList() ([]interface{}, error) {
 		err = txErr
 		return nil, err
 	}
-	defer tx.Close()
+	defer func() { err = errors.Join(err, tx.Close()) }()
 
 	// 2. Execute Pipeline
 	var iter Iterator = nil // Start null
@@ -287,10 +286,9 @@ func (tp *TraversalPipeline) ToList() ([]interface{}, error) {
 			return nil, err
 		}
 	}
-	defer iter.Close()
+	defer func() { err = errors.Join(err, iter.Close()) }()
 
 	// 3. Drain Iterator
-	var results []interface{}
 	for iter.Next() {
 		// Extract value
 		if ni, ok := iter.(NodeIterator); ok {

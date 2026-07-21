@@ -10,6 +10,20 @@ import (
 	"github.com/npclaudiu/pathway"
 )
 
+func closeBenchmarkResource(b testing.TB, closer interface{ Close() error }) {
+	b.Helper()
+	if err := closer.Close(); err != nil {
+		b.Errorf("close benchmark resource: %v", err)
+	}
+}
+
+func removeBenchmarkDirectory(b testing.TB, path string) {
+	b.Helper()
+	if err := os.RemoveAll(path); err != nil {
+		b.Errorf("remove benchmark directory: %v", err)
+	}
+}
+
 // RunBenchmark executes a benchmark function against both Memory and Disk storage backends.
 func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 	b.Helper()
@@ -20,7 +34,7 @@ func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 		if err != nil {
 			b.Fatalf("failed to open memory db: %v", err)
 		}
-		defer db.Close()
+		defer closeBenchmarkResource(b, db)
 		fn(b, db)
 	})
 
@@ -30,13 +44,13 @@ func RunBenchmark(b *testing.B, fn func(b *testing.B, db *pathway.Database)) {
 		if err != nil {
 			b.Fatalf("failed to create temp dir: %v", err)
 		}
-		defer os.RemoveAll(dir)
+		defer removeBenchmarkDirectory(b, dir)
 
 		db, err := pathway.Open(dir)
 		if err != nil {
 			b.Fatalf("failed to open disk db: %v", err)
 		}
-		defer db.Close()
+		defer closeBenchmarkResource(b, db)
 		fn(b, db)
 	})
 }

@@ -9,7 +9,7 @@ import (
 
 func TestQuery_V_InvalidUUID(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 
 	// Create one valid node
 	id := uuid.New()
@@ -45,7 +45,7 @@ func TestQuery_ToList_NilDatabase(t *testing.T) {
 
 func TestQuery_Path_Check(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	u1 := uuid.New()
@@ -118,7 +118,7 @@ func TestQuery_Path_Check(t *testing.T) {
 
 func TestQuery_HasLabel(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	u1 := uuid.New()
@@ -154,7 +154,7 @@ func TestQuery_HasLabel(t *testing.T) {
 
 func TestQuery_In(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	u1 := uuid.New()
@@ -188,7 +188,7 @@ func TestQuery_In(t *testing.T) {
 
 func TestQuery_Repeat(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	// Chain: A -> B -> C
@@ -234,7 +234,7 @@ func TestQuery_Repeat(t *testing.T) {
 func TestQuery_Values(t *testing.T) {
 	// Values is currently a no-op placeholder, verifying it passes through.
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	id := uuid.New()
 	if err := db.Update(context.Background(), func(tx *Tx) error {
 		return tx.PutNode(id, "Node")
@@ -258,7 +258,7 @@ func TestQuery_Limit_Count_Placeholder(t *testing.T) {
 	// We should call them to cover the builder code.
 
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	g := NewTraversalSource(db)
 
 	p := g.V().Emit().Until(func(i interface{}) bool { return true })

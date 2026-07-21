@@ -10,7 +10,7 @@ import (
 
 func TestSnapshot(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	// 1. Create Data
@@ -26,7 +26,7 @@ func TestSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSnapshot failed: %v", err)
 	}
-	defer snap.Close()
+	defer closeTestResource(t, snap)
 
 	// 3. Verify Get
 	key := encoding.EncodeNodeKey(id)

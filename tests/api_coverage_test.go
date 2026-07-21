@@ -10,6 +10,13 @@ import (
 	"github.com/npclaudiu/pathway"
 )
 
+func closeTestResource(t testing.TB, closer interface{ Close() error }) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Errorf("close resource: %v", err)
+	}
+}
+
 // Helper: Replicate encoding logic to verify storage keys directly
 // We recreate this here to ensure our tests are independent of internal changes logic (blackbox-ish)
 // asking "Did it write the bytes we expect?"
@@ -79,7 +86,7 @@ func TestAPICoverage(t *testing.T) {
 	// 2. Node Operations
 	t.Run("NodeOperations", func(t *testing.T) {
 		db, _ := pathway.Open(":memory:")
-		defer db.Close()
+		defer closeTestResource(t, db)
 		ctx := context.Background()
 
 		id := uuid.New()
@@ -150,7 +157,7 @@ func TestAPICoverage(t *testing.T) {
 	// 3. Edge Operations
 	t.Run("EdgeOperations", func(t *testing.T) {
 		db, _ := pathway.Open(":memory:")
-		defer db.Close()
+		defer closeTestResource(t, db)
 		ctx := context.Background()
 
 		u1 := uuid.New()
@@ -212,7 +219,7 @@ func TestAPICoverage(t *testing.T) {
 		// C. Traversal (Iterator)
 		if err := db.View(ctx, func(tx *pathway.Tx) error {
 			iter := tx.OutEdges(u1) // Should find 1
-			defer iter.Close()
+			defer closeTestResource(t, iter)
 			found := false
 			for iter.Next() {
 				eid, other, lbl, _ := iter.Edge()
@@ -254,7 +261,7 @@ func TestAPICoverage(t *testing.T) {
 	// 4. Property Operations
 	t.Run("PropertyOperations", func(t *testing.T) {
 		db, _ := pathway.Open(":memory:")
-		defer db.Close()
+		defer closeTestResource(t, db)
 		ctx := context.Background()
 		id := uuid.New()
 
@@ -299,7 +306,7 @@ func TestAPICoverage(t *testing.T) {
 	// 5. Query API
 	t.Run("QueryAPI", func(t *testing.T) {
 		db, _ := pathway.Open(":memory:")
-		defer db.Close()
+		defer closeTestResource(t, db)
 		ctx := context.Background()
 
 		// Seeding: A -> B

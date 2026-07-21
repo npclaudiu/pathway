@@ -21,7 +21,7 @@ func (tx *Tx) Load(id uuid.UUID, dest interface{}) error {
 
 	// 2. Reflect on dest
 	v := reflect.ValueOf(dest)
-	if v.Kind() != reflect.Ptr || v.IsNil() {
+	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return errors.New("dest must be a non-nil pointer")
 	}
 	v = v.Elem()

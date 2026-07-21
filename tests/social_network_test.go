@@ -31,7 +31,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open db: %v", err)
 	}
-	defer db.Close()
+	defer closeTestResource(t, db)
 
 	ctx := context.Background()
 
@@ -156,7 +156,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 		if lbl != "User" {
 			t.Errorf("Expected Alice label User, got %s", lbl)
 		}
-		rtx.Close()
+		closeTestResource(t, rtx)
 	}
 
 	// 3. Validate Queries using Fluid Interface
@@ -210,9 +210,10 @@ func TestSocialNetworkQueries(t *testing.T) {
 		for _, r := range results {
 			if m, ok := r.(map[string]interface{}); ok {
 				if id, ok := m["id"].(uuid.UUID); ok {
-					if id == users["Charlie"] {
+					switch id {
+					case users["Charlie"]:
 						foundNames++
-					} else if id == users["Dave"] {
+					case users["Dave"]:
 						foundNames++
 					}
 				}

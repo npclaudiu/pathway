@@ -15,6 +15,18 @@ Developed using [Google Antigravity](https://antigravity.google/).
 go get github.com/npclaudiu/pathway
 ```
 
+### Upgrading existing databases
+
+Pathway now uses Pebble v2. Before opening an on-disk database created by an
+earlier Pathway version, upgrade its Pebble format with the final v1 release:
+
+```bash
+go run github.com/cockroachdb/pebble/cmd/pebble@v1.1.5 db upgrade <db-dir>
+```
+
+Pebble format upgrades are permanent, so back up the database first. New and
+in-memory databases do not need this step.
+
 ## Quickstart
 
 Initialize the database, perform transactions, and run queries.

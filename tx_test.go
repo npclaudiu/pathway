@@ -15,7 +15,7 @@ func TestTx_PutNode_InvalidLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer closeTestResource(t, db)
 
 	ctx := context.Background()
 	longLabel := strings.Repeat("A", 65536)
@@ -31,7 +31,7 @@ func TestTx_PutNode_InvalidLabel(t *testing.T) {
 
 func TestTx_PutEdge_Dangling(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	u1 := uuid.New() // Not added
@@ -63,7 +63,7 @@ func TestTx_PutEdge_Dangling(t *testing.T) {
 
 func TestTx_DeleteEdge_NotImplemented(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	err := db.Update(ctx, func(tx *Tx) error {
@@ -76,7 +76,7 @@ func TestTx_DeleteEdge_NotImplemented(t *testing.T) {
 
 func TestTx_FindNodes(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	id1 := uuid.New()
@@ -84,12 +84,17 @@ func TestTx_FindNodes(t *testing.T) {
 
 	// Seed properties
 	err := db.Update(ctx, func(tx *Tx) error {
-		tx.PutNode(id1, "User")
-		tx.SetProperties(id1, map[string]interface{}{"name": "alice", "age": 30})
+		if err := tx.PutNode(id1, "User"); err != nil {
+			return err
+		}
+		if err := tx.SetProperties(id1, map[string]interface{}{"name": "alice", "age": 30}); err != nil {
+			return err
+		}
 
-		tx.PutNode(id2, "User")
-		tx.SetProperties(id2, map[string]interface{}{"name": "bob", "age": 40})
-		return nil
+		if err := tx.PutNode(id2, "User"); err != nil {
+			return err
+		}
+		return tx.SetProperties(id2, map[string]interface{}{"name": "bob", "age": 40})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +103,7 @@ func TestTx_FindNodes(t *testing.T) {
 	// Test FindNodes positive case
 	err = db.View(ctx, func(tx *Tx) error {
 		it := tx.FindNodes("User", "name", "alice")
-		defer it.Close()
+		defer closeTestResource(t, it)
 
 		if !it.Next() {
 			t.Error("expected to find node")
@@ -128,7 +133,7 @@ func TestTx_FindNodes(t *testing.T) {
 	// Test FindNodes negative case
 	err = db.View(ctx, func(tx *Tx) error {
 		it := tx.FindNodes("User", "name", "charlie")
-		defer it.Close()
+		defer closeTestResource(t, it)
 
 		if it.Next() {
 			t.Error("expected no nodes")
@@ -142,7 +147,7 @@ func TestTx_FindNodes(t *testing.T) {
 
 func TestTx_ScanNodes(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
@@ -159,7 +164,7 @@ func TestTx_ScanNodes(t *testing.T) {
 
 	err := db.View(ctx, func(tx *Tx) error {
 		it := tx.ScanNodes()
-		defer it.Close()
+		defer closeTestResource(t, it)
 
 		count := 0
 		for it.Next() {
@@ -222,7 +227,7 @@ func TestKeyUpperBound(t *testing.T) {
 
 func TestTx_Iterator_GenericMethods(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	id := uuid.New()
@@ -234,7 +239,7 @@ func TestTx_Iterator_GenericMethods(t *testing.T) {
 
 	if err := db.View(ctx, func(tx *Tx) error {
 		it := tx.ScanNodes()
-		defer it.Close()
+		defer closeTestResource(t, it)
 
 		if it.Next() {
 			k := it.Key()

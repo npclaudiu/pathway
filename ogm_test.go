@@ -16,7 +16,7 @@ type UserStruct struct {
 
 func TestTx_Load(t *testing.T) {
 	db, _ := Open(":memory:")
-	defer db.Close()
+	defer closeTestResource(t, db)
 	ctx := context.Background()
 
 	id := uuid.New()
