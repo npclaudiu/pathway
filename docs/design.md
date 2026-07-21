@@ -462,13 +462,23 @@ avoids nil-wrapper panics while retaining the existing API shape.
   endpoint from the adjacency key.
 - `nodeIndexIterator` takes the node UUID from the key suffix and the label from
   the index key; it does not point-read the node.
-- `fixedNodeIterator` resolves explicit IDs supplied to `V`.
+- `fixedNodeIterator` resolves explicit IDs supplied to `V` with an existence
+  probe and loads their labels only when requested.
 - `flatMapEdgeIterator` converts each input node into an adjacency iterator and
-  flattens those iterators.
-- `neighborIterator` converts each adjacency entry back into a node by
-  point-reading the other endpoint's label.
+  flattens those iterators. It consumes the package-private ID-only iterator
+  capability when available, so another hop does not force label loading.
+- `neighborIterator` converts each adjacency entry into a lightweight node
+  reference. Its UUID comes directly from the adjacency key; `Node`, `Value`,
+  and `Path` load and cache the other endpoint's label on demand.
+- `idIterator` materializes UUID results without requesting labels.
 - `filterIterator`, `valueIterator`, `pathIterator`, and `repeatIterator`
-  implement query steps.
+  implement the remaining query steps.
+
+`NodeIterator` remains source-compatible for external implementations. The
+execution engine detects an optional package-private `NodeID` method and falls
+back to `Node` for third-party iterators. Labels are not duplicated into
+adjacency records, so this optimization does not change the persistent schema
+or add a relabel synchronization invariant.
 
 ### Iterator limitations
 
@@ -484,8 +494,8 @@ Malformed node labels are not consistently rejected: `GetNode` and
 reverse-record decoders are stricter. Corruption handling should become
 consistent before treating low-level raw writes as supported.
 
-`fixedNodeIterator.Next` and `flatMapEdgeIterator.Next` use recursion to skip
-missing IDs or empty inner iterators. Large sparse inputs can grow the stack.
+`flatMapEdgeIterator.Next` uses recursion to skip empty inner iterators. A long
+sequence of input nodes with no matching edges can grow the stack.
 
 ## Traversal and query execution
 
@@ -507,14 +517,17 @@ byte order.
 ```text
 NodeIterator
   -> flatMapEdgeIterator(OutEdges or InEdges)
-  -> neighborIterator(point-read node label)
+  -> neighborIterator(lazy node reference)
   -> NodeIterator
 ```
 
-This creates one node-label point read per traversed edge. It is the principal
-traversal N+1 cost. Edge-label filtering currently occurs inside
-`edgeIterator` after scanning the node's whole adjacency range rather than by
-tighter Pebble bounds.
+UUIDs flow between navigation steps through an internal ID-only capability.
+`IDs` consumes that capability and therefore scans adjacency without
+point-reading each neighbor's node record. Normal node materialization,
+`HasLabel`, and `Path` request labels and perform one lazy point read per
+neighbor. `Values` uses the UUID directly and reads only the property record.
+Edge-label filtering currently occurs inside `edgeIterator` after scanning the
+node's whole adjacency range rather than by tighter Pebble bounds.
 
 `HasLabel` currently assumes a node stream and evaluates an anonymous
 `{ID, Label}` value. There is no general typed element algebra or query planner;
@@ -535,7 +548,8 @@ pipeline type compatibility is enforced dynamically at iteration time.
 
 Terminal results depend on the final iterator:
 
-- projected `resultIterator` values are appended directly;
+- projected `resultIterator` values, including UUIDs from `IDs`, are appended
+  directly;
 - nodes become `map[string]any` with `id`, `label`, and `type`;
 - edges become `map[string]any` with `id`, `other`, `label`, and `type`;
 - an unknown generic iterator falls back to its raw key.
@@ -546,7 +560,15 @@ transaction constructors are not checked during iteration. Observability hooks
 therefore always receive a background context for traversal queries. Hook
 panics are not recovered. The configured `Logger` is currently unused.
 
-### Property projection
+### ID and property projection
+
+`IDs()` accepts a node stream and emits one `uuid.UUID` per input node. It does
+not retain path state or load node labels. Explicit `V(id)` still performs one
+existence-only probe for the starting node; each traversed neighbor UUID comes
+from its adjacency entry. On stores corrupted through raw writes, an ID-only
+traversal can therefore expose a dangling neighbor UUID, while a label-bearing
+projection detects its missing node record as `ErrNodeNotFound`. Public edge
+mutation APIs prevent dangling edges.
 
 `Values(keys...)` accepts node or edge streams. For each entity, it point-loads
 the complete property map, then emits one scalar for each requested key that is
@@ -649,7 +671,8 @@ The principal costs and write amplification are architectural, not incidental:
 | Delete edge | reverse point read, four deletes |
 | Delete node | property/index work, two adjacency scans, incident-edge UUID set, four deletes per edge |
 | Exact indexed lookup | snapshot creation plus bounded index scan |
-| One-hop traversal | adjacency scan plus one node point read per edge |
+| One-hop traversal with `IDs` | starting-node existence probe plus adjacency scan; no neighbor-label reads |
+| Label-bearing one-hop traversal | adjacency scan plus one lazy node point read per edge |
 | `Values` | one property point read and full decode per entity |
 | `ToList` | snapshot lifecycle plus full result allocation |
 
@@ -662,7 +685,7 @@ interpreting results.
 Likely optimization directions must preserve invariants:
 
 - tighter adjacency bounds for label filters;
-- carrying neighbor labels or batching label reads to remove traversal N+1;
+- batching label reads when label-bearing nodes must be materialized;
 - streaming terminal methods and caller contexts;
 - a typed property codec that avoids protobuf/`structpb` hot-path conversions;
 - queue-head indexes and visited policies for repeat traversal.
@@ -757,7 +780,7 @@ workload before the timed region and compare multiple runs with `benchstat`.
 `IMPROVEMENTS.md` is the tracked roadmap. The most consequential remaining
 design issues are:
 
-- traversal N+1 node and property reads;
+- label-bearing and property projections still perform per-result point reads;
 - mutable, dynamically typed pipelines and untyped normal node/edge results;
 - no context-aware or streaming terminal execution;
 - incomplete repeat validation, cycle policy, queue efficiency, and paths;

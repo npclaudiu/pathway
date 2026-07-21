@@ -53,6 +53,23 @@ type resultIterator interface {
 	Result() (interface{}, error)
 }
 
+// nodeIDIterator is an internal optional capability for consuming a node ID
+// without forcing lazy iterators to load the node label.
+type nodeIDIterator interface {
+	NodeID() (uuid.UUID, error)
+}
+
+func currentNodeID(iter Iterator) (uuid.UUID, error) {
+	if ids, ok := iter.(nodeIDIterator); ok {
+		return ids.NodeID()
+	}
+	if nodes, ok := iter.(NodeIterator); ok {
+		id, _, err := nodes.Node()
+		return id, err
+	}
+	return uuid.Nil, errors.New("pipeline type mismatch: expected node")
+}
+
 // errorIterator preserves an iterator-construction error while providing a
 // safe, inert implementation of every Iterator method.
 type errorIterator struct {
@@ -208,18 +225,28 @@ func (it *nodeIterator) Node() (uuid.UUID, string, error) {
 	if !it.valid {
 		return uuid.Nil, "", it.Error()
 	}
-	// Key format: [Prefix] + [NodeID]
-	key := it.iter.Key()
-	if len(key) < 17 {
-		return uuid.Nil, "", encoding.ErrInvalidKeyFormat
+	id, err := it.NodeID()
+	if err != nil {
+		return uuid.Nil, "", err
 	}
-	var id uuid.UUID
-	copy(id[:], key[1:])
 
 	val := it.iter.Value()
 	label, _ := encoding.DecodeLabel(val)
 
 	return id, label, nil
+}
+
+func (it *nodeIterator) NodeID() (uuid.UUID, error) {
+	if !it.valid {
+		return uuid.Nil, it.Error()
+	}
+	key := it.iter.Key()
+	if len(key) < 17 {
+		return uuid.Nil, encoding.ErrInvalidKeyFormat
+	}
+	var id uuid.UUID
+	copy(id[:], key[1:])
+	return id, nil
 }
 
 func (it *nodeIterator) Close() error {
@@ -263,18 +290,14 @@ func (it *nodeIndexIterator) Node() (uuid.UUID, string, error) {
 	if !it.valid {
 		return uuid.Nil, "", it.Error()
 	}
-	// Key format: [EncodeIndexPrefix...] + [NodeID: 16 bytes]
-	key := it.iter.Key()
-	if len(key) < 17 { // Minimum is prefix (1) + NodeID (16)
-		return uuid.Nil, "", encoding.ErrInvalidKeyFormat
+	id, err := it.NodeID()
+	if err != nil {
+		return uuid.Nil, "", err
 	}
-
-	// Extract NodeID from the end
-	var id uuid.UUID
-	copy(id[:], key[len(key)-16:])
 
 	// Reconstruct Label from prefix
 	// format: [Prefix:1] [LabelLen:2] [Label]
+	key := it.iter.Key()
 	offset := 1
 	label, n := encoding.DecodeLabel(key[offset:])
 	if n == 0 {
@@ -282,6 +305,19 @@ func (it *nodeIndexIterator) Node() (uuid.UUID, string, error) {
 	}
 
 	return id, label, nil
+}
+
+func (it *nodeIndexIterator) NodeID() (uuid.UUID, error) {
+	if !it.valid {
+		return uuid.Nil, it.Error()
+	}
+	key := it.iter.Key()
+	if len(key) < 17 {
+		return uuid.Nil, encoding.ErrInvalidKeyFormat
+	}
+	var id uuid.UUID
+	copy(id[:], key[len(key)-16:])
+	return id, nil
 }
 
 func (it *nodeIndexIterator) Close() error {
@@ -306,7 +342,7 @@ func (it *nodeIndexIterator) Key() []byte {
 	if !it.valid {
 		return nil
 	}
-	id, _, err := it.Node()
+	id, err := it.NodeID()
 	if err != nil {
 		return nil
 	}
@@ -340,12 +376,13 @@ func (it *nodeIndexIterator) Path() Path {
 
 // fixedNodeIterator iterates over a fixed slice of UUIDs
 type fixedNodeIterator struct {
-	tx     *Tx
-	ids    []uuid.UUID
-	idx    int
-	curID  uuid.UUID
-	curLbl string
-	err    error
+	tx          *Tx
+	ids         []uuid.UUID
+	idx         int
+	curID       uuid.UUID
+	curLbl      string
+	labelLoaded bool
+	err         error
 }
 
 func newFixedNodeIterator(tx *Tx, ids []uuid.UUID) *fixedNodeIterator {
@@ -353,37 +390,77 @@ func newFixedNodeIterator(tx *Tx, ids []uuid.UUID) *fixedNodeIterator {
 }
 
 func (it *fixedNodeIterator) Next() bool {
-	it.idx++
-	if it.idx >= len(it.ids) {
-		return false
+	for {
+		it.idx++
+		if it.idx >= len(it.ids) {
+			return false
+		}
+		exists, err := it.tx.nodeExists(it.ids[it.idx])
+		if err != nil {
+			it.err = err
+			return false
+		}
+		if !exists {
+			continue
+		}
+		it.curID = it.ids[it.idx]
+		it.curLbl = ""
+		it.labelLoaded = false
+		return true
 	}
-	// Check existence
-	lbl, exists, err := it.tx.GetNode(it.ids[it.idx])
-	if err != nil {
-		it.err = err
-		return false
-	}
-	if !exists {
-		return it.Next() // Recurse to skip
-	}
-	it.curID = it.ids[it.idx]
-	it.curLbl = lbl
-	return true
 }
 
 func (it *fixedNodeIterator) Node() (uuid.UUID, string, error) {
+	if err := it.loadLabel(); err != nil {
+		return uuid.Nil, "", err
+	}
 	return it.curID, it.curLbl, it.err
+}
+
+func (it *fixedNodeIterator) NodeID() (uuid.UUID, error) {
+	if !it.Valid() {
+		return uuid.Nil, it.Error()
+	}
+	return it.curID, nil
+}
+
+func (it *fixedNodeIterator) loadLabel() error {
+	if it.labelLoaded || it.err != nil {
+		return it.err
+	}
+	label, exists, err := it.tx.GetNode(it.curID)
+	if err != nil {
+		it.err = err
+		return err
+	}
+	if !exists {
+		it.err = ErrNodeNotFound
+		return it.err
+	}
+	it.curLbl = label
+	it.labelLoaded = true
+	return nil
 }
 
 func (it *fixedNodeIterator) Close() error { return nil }
 func (it *fixedNodeIterator) Error() error { return it.err }
 
-func (it *fixedNodeIterator) Key() []byte            { return encoding.EncodeNodeKey(it.curID) }
-func (it *fixedNodeIterator) Value() []byte          { return []byte(it.curLbl) }
-func (it *fixedNodeIterator) Valid() bool            { return it.idx >= 0 && it.idx < len(it.ids) }
+func (it *fixedNodeIterator) Value() []byte {
+	if err := it.loadLabel(); err != nil {
+		return nil
+	}
+	return []byte(it.curLbl)
+}
+func (it *fixedNodeIterator) Key() []byte { return encoding.EncodeNodeKey(it.curID) }
+func (it *fixedNodeIterator) Valid() bool {
+	return it.idx >= 0 && it.idx < len(it.ids) && it.err == nil
+}
 func (it *fixedNodeIterator) SeekGE(key []byte) bool { return false }
 
 func (it *fixedNodeIterator) Path() Path {
+	if err := it.loadLabel(); err != nil {
+		return nil
+	}
 	return Path{{Kind: PathNode, ID: it.curID, Label: it.curLbl}}
 }
 
@@ -419,8 +496,8 @@ func (it *flatMapEdgeIterator) Next() bool {
 	// Extract Node ID from prev
 	var nodeID uuid.UUID
 	// Try typed
-	if ni, ok := it.prev.(NodeIterator); ok {
-		id, _, err := ni.Node()
+	if _, ok := it.prev.(NodeIterator); ok {
+		id, err := currentNodeID(it.prev)
 		if err != nil {
 			it.err = err
 			return false
@@ -547,6 +624,7 @@ func (it *filterIterator) Node() (uuid.UUID, string, error) {
 	}
 	return uuid.Nil, "", errors.New("not a node iterator")
 }
+func (it *filterIterator) NodeID() (uuid.UUID, error) { return currentNodeID(it.prev) }
 func (it *filterIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 	if ei, ok := it.prev.(EdgeIterator); ok {
 		return ei.Edge()
@@ -585,7 +663,7 @@ func (it *valueIterator) Next() bool {
 		var entityID uuid.UUID
 		switch prev := it.prev.(type) {
 		case NodeIterator:
-			id, _, err := prev.Node()
+			id, err := currentNodeID(prev)
 			if err != nil {
 				it.err = err
 				return false
@@ -785,13 +863,14 @@ func (it *repeatIterator) Next() bool {
 func (it *repeatIterator) Node() (uuid.UUID, string, error) {
 	return it.curItem.id, it.curItem.label, nil
 }
-func (it *repeatIterator) Close() error         { return it.prev.Close() }
-func (it *repeatIterator) Error() error         { return it.err }
-func (it *repeatIterator) Key() []byte          { return encoding.EncodeNodeKey(it.curItem.id) }
-func (it *repeatIterator) Value() []byte        { return []byte(it.curItem.label) }
-func (it *repeatIterator) Valid() bool          { return true }
-func (it *repeatIterator) SeekGE(k []byte) bool { return false }
-func (it *repeatIterator) Path() Path           { return it.curItem.path }
+func (it *repeatIterator) NodeID() (uuid.UUID, error) { return it.curItem.id, it.err }
+func (it *repeatIterator) Close() error               { return it.prev.Close() }
+func (it *repeatIterator) Error() error               { return it.err }
+func (it *repeatIterator) Key() []byte                { return encoding.EncodeNodeKey(it.curItem.id) }
+func (it *repeatIterator) Value() []byte              { return []byte(it.curItem.label) }
+func (it *repeatIterator) Valid() bool                { return true }
+func (it *repeatIterator) SeekGE(k []byte) bool       { return false }
+func (it *repeatIterator) Path() Path                 { return it.curItem.path }
 
 // neighborIterator wraps an EdgeIterator and yields the neighbor Node.
 type neighborIterator struct {
@@ -799,9 +878,11 @@ type neighborIterator struct {
 	iter EdgeIterator
 	dir  string // "out" or "in"
 	// Current Node state
-	curID  uuid.UUID
-	curLbl string
-	err    error
+	curID       uuid.UUID
+	curLbl      string
+	labelLoaded bool
+	valid       bool
+	err         error
 }
 
 func newNeighborIterator(tx *Tx, iter EdgeIterator, dir string) *neighborIterator {
@@ -809,52 +890,137 @@ func newNeighborIterator(tx *Tx, iter EdgeIterator, dir string) *neighborIterato
 }
 
 func (it *neighborIterator) Next() bool {
+	it.valid = false
 	if it.err != nil {
 		return false
 	}
-	// Loop until we find a valid node or iterator exhausts
-	for it.iter.Next() {
-		_, otherID, _, err := it.iter.Edge() // OutEdges returns: edgeID, targetID, label
-		if err != nil {
-			it.err = err
-			return false
-		}
-		// Fetch Node Label
-		lbl, exists, err := it.tx.GetNode(otherID)
-		if err != nil {
-			it.err = err
-			return false
-		}
-		if !exists {
-			continue // Dangling edge? skip
-		}
-		it.curID = otherID
-		it.curLbl = lbl
-		return true
+	if !it.iter.Next() {
+		return false
 	}
-	return false
+	_, otherID, _, err := it.iter.Edge()
+	if err != nil {
+		it.err = err
+		return false
+	}
+	it.curID = otherID
+	it.curLbl = ""
+	it.labelLoaded = false
+	it.valid = true
+	return true
 }
 
 func (it *neighborIterator) Node() (uuid.UUID, string, error) {
-	if it.curID == uuid.Nil {
-		return uuid.Nil, "", errors.New("invalid iterator state")
+	if err := it.loadLabel(); err != nil {
+		return uuid.Nil, "", err
 	}
 	return it.curID, it.curLbl, nil
 }
 
+func (it *neighborIterator) NodeID() (uuid.UUID, error) {
+	if !it.valid {
+		if err := it.Error(); err != nil {
+			return uuid.Nil, err
+		}
+		return uuid.Nil, errors.New("invalid iterator state")
+	}
+	return it.curID, nil
+}
+
+func (it *neighborIterator) loadLabel() error {
+	if it.labelLoaded || it.err != nil {
+		return it.err
+	}
+	if !it.valid {
+		return errors.New("invalid iterator state")
+	}
+	label, exists, err := it.tx.GetNode(it.curID)
+	if err != nil {
+		it.err = err
+		return err
+	}
+	if !exists {
+		it.err = ErrNodeNotFound
+		return it.err
+	}
+	it.curLbl = label
+	it.labelLoaded = true
+	return nil
+}
+
 func (it *neighborIterator) Close() error { return it.iter.Close() }
-func (it *neighborIterator) Error() error { return it.err }
+func (it *neighborIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	return it.iter.Error()
+}
 
 // Key/Value reflect the Node
-func (it *neighborIterator) Key() []byte          { return encoding.EncodeNodeKey(it.curID) }
-func (it *neighborIterator) Value() []byte        { return []byte(it.curLbl) }
-func (it *neighborIterator) Valid() bool          { return it.iter.Valid() } // approx
+func (it *neighborIterator) Key() []byte { return encoding.EncodeNodeKey(it.curID) }
+func (it *neighborIterator) Value() []byte {
+	if err := it.loadLabel(); err != nil {
+		return nil
+	}
+	return []byte(it.curLbl)
+}
+func (it *neighborIterator) Valid() bool          { return it.valid && it.err == nil }
 func (it *neighborIterator) SeekGE(k []byte) bool { return false }
 func (it *neighborIterator) Path() Path {
+	if err := it.loadLabel(); err != nil {
+		return nil
+	}
 	// Extend path from edge
 	p := it.iter.Path()
 	path := make(Path, len(p)+1)
 	copy(path, p)
 	path[len(p)] = PathElement{Kind: PathNode, ID: it.curID, Label: it.curLbl}
 	return path
+}
+
+// idIterator projects node IDs without materializing node labels.
+type idIterator struct {
+	prev    Iterator
+	current uuid.UUID
+	valid   bool
+	err     error
+}
+
+func newIDIterator(prev Iterator) *idIterator { return &idIterator{prev: prev} }
+
+func (it *idIterator) Next() bool {
+	it.valid = false
+	if it.err != nil || !it.prev.Next() {
+		return false
+	}
+	id, err := currentNodeID(it.prev)
+	if err != nil {
+		it.err = err
+		return false
+	}
+	it.current = id
+	it.valid = true
+	return true
+}
+
+func (it *idIterator) Result() (interface{}, error) {
+	if !it.valid {
+		if err := it.Error(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("invalid iterator state")
+	}
+	return it.current, nil
+}
+
+func (it *idIterator) Close() error       { return it.prev.Close() }
+func (it *idIterator) Key() []byte        { return nil }
+func (it *idIterator) Value() []byte      { return nil }
+func (it *idIterator) Valid() bool        { return it.valid }
+func (it *idIterator) SeekGE([]byte) bool { return false }
+func (it *idIterator) Path() Path         { return nil }
+func (it *idIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	return it.prev.Error()
 }

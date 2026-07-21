@@ -48,6 +48,7 @@ import "github.com/npclaudiu/pathway"
 - [type TraversalPipeline](<#TraversalPipeline>)
   - [func \(tp \*TraversalPipeline\) Emit\(\) \*TraversalPipeline](<#TraversalPipeline.Emit>)
   - [func \(tp \*TraversalPipeline\) HasLabel\(labels ...string\) \*TraversalPipeline](<#TraversalPipeline.HasLabel>)
+  - [func \(tp \*TraversalPipeline\) IDs\(\) \*TraversalPipeline](<#TraversalPipeline.IDs>)
   - [func \(tp \*TraversalPipeline\) In\(labels ...string\) \*TraversalPipeline](<#TraversalPipeline.In>)
   - [func \(tp \*TraversalPipeline\) Out\(labels ...string\) \*TraversalPipeline](<#TraversalPipeline.Out>)
   - [func \(tp \*TraversalPipeline\) Path\(\) \*TraversalPipeline](<#TraversalPipeline.Path>)
@@ -615,6 +616,15 @@ func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline
 
 HasLabel filters the current stream of elements, keeping only those with the specified label\(s\).
 
+<a name="TraversalPipeline.IDs"></a>
+### func \(\*TraversalPipeline\) [IDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L253>)
+
+```go
+func (tp *TraversalPipeline) IDs() *TraversalPipeline
+```
+
+IDs projects UUIDs from the current node stream. Unlike materializing nodes with ToList, this projection does not load node labels.
+
 <a name="TraversalPipeline.In"></a>
 ### func \(\*TraversalPipeline\) [In](<https://github.com/npclaudiu/pathway/blob/main/query.go#L138>)
 
@@ -684,7 +694,7 @@ func (tp *TraversalPipeline) Times(n int) *TraversalPipeline
 Times terminates a Repeat loop after a fixed number of iterations.
 
 <a name="TraversalPipeline.ToList"></a>
-### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L266>)
+### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L276>)
 
 ```go
 func (tp *TraversalPipeline) ToList() (results []interface{}, err error)
@@ -702,7 +712,7 @@ func (tp *TraversalPipeline) Until(pred Predicate) *TraversalPipeline
 Until terminates a Repeat loop when the predicate is true for the current element.
 
 <a name="TraversalPipeline.Values"></a>
-### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L254>)
+### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L264>)
 
 ```go
 func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline

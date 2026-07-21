@@ -147,8 +147,8 @@ the operations staged before it.
 ## 4. Querying
 
 Pathway provides a fluent traversal interface inspired by Gremlin. Node results
-are currently represented as `map[string]any`; property and path projections
-have scalar and typed result forms, respectively.
+are currently represented as `map[string]any`; ID, property, and path
+projections return UUIDs, scalars, and typed paths, respectively.
 
 ### 4.1 Find Friends of Alice
 
@@ -214,7 +214,26 @@ if err != nil {
 }
 ```
 
-### 4.5 Project Property Values
+### 4.5 Project Node IDs
+
+Use `IDs` when the caller needs only UUIDs. Neighbor labels are loaded lazily,
+so this avoids one node-label point read per traversed edge and is especially
+useful for high-degree nodes and multi-hop traversals.
+
+```go
+friendIDs, err := g.V(aliceID.String()).
+    Out("FOLLOWS").
+    IDs().
+    ToList()
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Each result is a `uuid.UUID`. Use ordinary `ToList` when labels are needed;
+`HasLabel` and `Path` also materialize labels by design.
+
+### 4.6 Project Property Values
 
 `Values` emits one typed scalar for every requested property that exists. The
 requested key order is preserved and missing properties are skipped.
@@ -229,7 +248,7 @@ if err != nil {
 }
 ```
 
-### 4.6 Inspect the Traversed Path
+### 4.7 Inspect the Traversed Path
 
 `Path` returns a `pathway.Path`. Each entry has a `Kind`, `ID`, and `Label`;
 edge entries also set `Other` to the endpoint reached by that step.

@@ -248,6 +248,16 @@ func (tp *TraversalPipeline) Path() *TraversalPipeline {
 
 // Projection Steps
 
+// IDs projects UUIDs from the current node stream. Unlike materializing nodes
+// with ToList, this projection does not load node labels.
+func (tp *TraversalPipeline) IDs() *TraversalPipeline {
+	tp.activeRepeat = nil
+	tp.steps = append(tp.steps, func(_ *Tx, prev Iterator) Iterator {
+		return newIDIterator(prev)
+	})
+	return tp
+}
+
 // Values projects properties from the current elements. It emits one typed
 // scalar per requested key, in key order. Missing properties are omitted, and
 // calling Values without keys produces an empty result stream.

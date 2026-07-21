@@ -59,6 +59,12 @@ func run() error {
 	}
 
 	g := pathway.NewTraversalSource(db)
+	ids, err := g.V(alice.String()).Out("FOLLOWS").IDs().ToList()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Alice follows IDs: %v\n", ids)
+
 	names, err := g.V(alice.String()).Out("FOLLOWS").Values("name").ToList()
 	if err != nil {
 		return err

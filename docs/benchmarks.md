@@ -16,7 +16,7 @@ Run focused suites:
 
 ```bash
 go test ./benchmarks -run '^$' -bench 'Benchmark(GetNode|ScanNodes|FindNodes)$' -benchmem -count 5
-go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|BFS_2Hop)$' -benchmem -count 5
+go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|TraverseOutHighDegree|BFS_2Hop)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge|BulkInsertEdge_100|InsertEdgeLargeEndpointLabels)$' -benchmem -count 5
 ```
 
@@ -25,6 +25,12 @@ measures an exact unique hit, a miss, an adversarial shared-prefix miss, and a
 lower-selectivity numeric hit. Traversal setup creates deterministic adjacency
 layers and validates the expected one-hop and two-hop cardinalities before
 starting the timer.
+
+`BenchmarkTraverseOutHighDegree` builds one node with 1,000 outgoing edges and
+compares `IDs` against normal label-bearing node materialization. The `IDs`
+case covers the adjacency-only neighbor path; the `Labels` case tracks the
+remaining lazy point-read cost when labels are requested. Both cases validate
+the complete result count before timing.
 
 The shared benchmark fixture explicitly configures `Person/name` and
 `Person/age` indexes. This keeps `BenchmarkFindNodes` an indexed lookup while

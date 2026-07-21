@@ -4,7 +4,7 @@ Pathway is an experimental Go library for an embedded, persistent graph database
 based on the [Pebble](https://github.com/cockroachdb/pebble) key-value database.
 It provides a fluid, Gremlin-like query interface for natural graph traversals.
 
-> **NOTE**: This is an experimental library in an early stage of development.
+> **NOTE**: This library is in an early stage of development.
 > Use with caution.
 
 ## Installation
@@ -165,11 +165,12 @@ Pathway currently supports these Gremlin-inspired traversal steps:
 
 * **Traversal**: `V`, `Out`, `In`
 * **Filtering**: `HasLabel`
-* **Projection**: `Values`, `Path`
+* **Projection**: `IDs`, `Values`, `Path`
 * **Recursion**: `Repeat` with `Times`
 
-`Values` emits one scalar for each requested property that exists. `Path`
-returns a typed `pathway.Path` containing ordered node and edge elements.
+`IDs` emits node UUIDs without loading labels, which is useful for high-degree
+traversals. `Values` emits one scalar for each requested property that exists.
+`Path` returns a typed `pathway.Path` containing ordered node and edge elements.
 
 ## Documentation
 

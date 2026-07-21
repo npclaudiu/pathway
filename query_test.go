@@ -260,6 +260,57 @@ func TestQuery_Values(t *testing.T) {
 	}
 }
 
+func TestQuery_IDsAvoidLabelMaterializationAcrossHops(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	a, b, c := uuid.New(), uuid.New(), uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		for id, label := range map[uuid.UUID]string{a: "A", b: "B", c: "C"} {
+			if err := tx.PutNode(id, label); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.PutEdge(a, b, "NEXT"); err != nil {
+			return err
+		}
+		if _, err := tx.PutEdge(b, c, "NEXT"); err != nil {
+			return err
+		}
+		return tx.SetProperties(b, map[string]interface{}{"name": "middle"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	g := NewTraversalSource(db)
+	oneHop, err := g.V(a.String()).Out("NEXT").IDs().ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []interface{}{b}; !reflect.DeepEqual(oneHop, want) {
+		t.Fatalf("one-hop IDs = %#v, want %#v", oneHop, want)
+	}
+
+	twoHops, err := g.V(a.String()).Out("NEXT").Out("NEXT").IDs().ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []interface{}{c}; !reflect.DeepEqual(twoHops, want) {
+		t.Fatalf("two-hop IDs = %#v, want %#v", twoHops, want)
+	}
+
+	values, err := g.V(a.String()).Out("NEXT").Values("name").ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []interface{}{"middle"}; !reflect.DeepEqual(values, want) {
+		t.Fatalf("neighbor values = %#v, want %#v", values, want)
+	}
+}
+
 func TestQuery_Limit_Count_Placeholder(t *testing.T) {
 	// Not implemented in query.go yet, skipping.
 	// But Emit/Until are methods on Pipeline.
