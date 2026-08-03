@@ -151,6 +151,32 @@ results are collected as `[]pathway.Node` with `ToNodes`; ID and path
 projections use `ToIDs` and `ToPaths`. Property projections remain dynamic and
 use `ToList` because one traversal can return mixed property types.
 
+If imported nodes already have stable identities, preserve them explicitly
+instead of deriving UUIDs. For example, decode a Git checksum to raw bytes and
+include the hash algorithm in the namespace:
+
+```go
+commitID, err := pathway.NewScopedExternalID(
+    "git-object/sha1",
+    []byte(canonicalRepositoryURL),
+    rawCommitDigest,
+)
+if err != nil {
+    log.Fatal(err)
+}
+err = db.Update(ctx, func(tx *pathway.Tx) error {
+    _, err := tx.PutNodeByExternalID(commitID, "Commit")
+    return err
+})
+```
+
+The same import is idempotent and returns the same internal UUID. Use
+`git-object/sha256` for SHA-256 repositories. Scope and value are separately
+length-delimited opaque bytes, so repository-local identity does not rely on
+ambiguous string concatenation. Traverse from the source identity with
+`g.VExternal(commitID)`; after resolution, graph traversal continues with the
+internal UUID.
+
 ### 4.1 Find Friends of Alice
 
 ```go

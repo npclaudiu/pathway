@@ -25,6 +25,72 @@ func TestEncodeNodeKey(t *testing.T) {
 	}
 }
 
+func TestExternalIDEncodingRoundTripAndFraming(t *testing.T) {
+	nodeID := uuid.New()
+	namespace := "git-object/sha256"
+	scope := []byte("repo\x00scope")
+	value := []byte{0, 1, 2, 0, 3}
+
+	forward, err := EncodeExternalIDKey(namespace, scope, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotNamespace, gotScope, gotValue, err := DecodeExternalIDKey(forward)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotNamespace != namespace || !bytes.Equal(gotScope, scope) || !bytes.Equal(gotValue, value) {
+		t.Fatalf("decoded external ID = %q/%x/%x", gotNamespace, gotScope, gotValue)
+	}
+
+	reverse, err := EncodeExternalIDReverseKey(nodeID, namespace, scope, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotNodeID, gotNamespace, gotScope, gotValue, err := DecodeExternalIDReverseKey(reverse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotNodeID != nodeID || gotNamespace != namespace ||
+		!bytes.Equal(gotScope, scope) || !bytes.Equal(gotValue, value) {
+		t.Fatalf("decoded reverse external ID = %s/%q/%x/%x", gotNodeID, gotNamespace, gotScope, gotValue)
+	}
+	if !bytes.HasPrefix(reverse, EncodeExternalIDReversePrefix(nodeID)) {
+		t.Fatal("reverse key does not use the node cleanup prefix")
+	}
+
+	// Length framing prevents component-boundary collisions.
+	first, err := EncodeExternalIDKey("a", []byte("bc"), []byte("d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := EncodeExternalIDKey("ab", []byte("c"), []byte("d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first, second) {
+		t.Fatal("distinct external ID components encoded to the same key")
+	}
+}
+
+func TestExternalIDEncodingRejectsMalformedData(t *testing.T) {
+	if _, err := EncodeExternalIDKey("", nil, []byte("value")); err != ErrInvalidExternalID {
+		t.Fatalf("empty namespace error = %v", err)
+	}
+	if _, err := EncodeExternalIDKey("namespace", nil, nil); err != ErrInvalidExternalID {
+		t.Fatalf("empty value error = %v", err)
+	}
+	if _, _, _, err := DecodeExternalIDKey([]byte{PrefixExternalID, 0, 1}); err != ErrInvalidKeyFormat {
+		t.Fatalf("truncated key error = %v", err)
+	}
+	if _, _, _, _, err := DecodeExternalIDReverseKey(make([]byte, 16)); err != ErrInvalidKeyFormat {
+		t.Fatalf("truncated reverse key error = %v", err)
+	}
+	if _, err := DecodeExternalIDValue(make([]byte, 15)); err != ErrInvalidValueFormat {
+		t.Fatalf("short forward value error = %v", err)
+	}
+}
+
 func TestEncodeEdgeOutKey(t *testing.T) {
 	src := uuid.New()
 	dst := uuid.New()

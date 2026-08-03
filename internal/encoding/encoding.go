@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -14,20 +15,25 @@ var (
 	ErrInvalidLabel       = errors.New("invalid label: exceeds max length or contains illegal characters")
 	ErrInvalidIndexKey    = errors.New("invalid index key: label or property key exceeds maximum length")
 	ErrInvalidIndexValue  = errors.New("invalid index value")
+	ErrInvalidExternalID  = errors.New("invalid external ID")
 	ErrInvalidKeyFormat   = errors.New("invalid key format encountered during iteration")
 	ErrInvalidValueFormat = errors.New("invalid value format encountered during iteration")
 )
 
 // Key Prefixes
 const (
-	PrefixNode       byte = 0x01
-	PrefixEdgeOut    byte = 0x02
-	PrefixEdgeIn     byte = 0x03
-	PrefixProperties byte = 0x04
-	PrefixIndex      byte = 0x05
-	PrefixEdgeByID   byte = 0x06
-	PrefixIndexDef   byte = 0x07
+	PrefixNode           byte = 0x01
+	PrefixEdgeOut        byte = 0x02
+	PrefixEdgeIn         byte = 0x03
+	PrefixProperties     byte = 0x04
+	PrefixIndex          byte = 0x05
+	PrefixEdgeByID       byte = 0x06
+	PrefixIndexDef       byte = 0x07
+	PrefixExternalID     byte = 0x08
+	PrefixExternalByNode byte = 0x09
 )
+
+const MaxExternalIDPartBytes = math.MaxUint16
 
 // EncodeNodeKey returns the key for a node: [PrefixNode] + [NodeID]
 func EncodeNodeKey(id uuid.UUID) []byte {
@@ -35,6 +41,128 @@ func EncodeNodeKey(id uuid.UUID) []byte {
 	k[0] = PrefixNode
 	copy(k[1:], id[:])
 	return k
+}
+
+// EncodeExternalIDKey returns the forward lookup key for a namespaced external
+// ID. Every component is length-delimited, so scopes and values cannot collide
+// through concatenation.
+func EncodeExternalIDKey(namespace string, scope, value []byte) ([]byte, error) {
+	suffix, err := encodeExternalIDSuffix(namespace, scope, value)
+	if err != nil {
+		return nil, err
+	}
+	key := make([]byte, 1+len(suffix))
+	key[0] = PrefixExternalID
+	copy(key[1:], suffix)
+	return key, nil
+}
+
+// EncodeExternalIDReverseKey returns a node-owned cleanup record key.
+func EncodeExternalIDReverseKey(nodeID uuid.UUID, namespace string, scope, value []byte) ([]byte, error) {
+	suffix, err := encodeExternalIDSuffix(namespace, scope, value)
+	if err != nil {
+		return nil, err
+	}
+	key := make([]byte, 1+len(nodeID)+len(suffix))
+	key[0] = PrefixExternalByNode
+	copy(key[1:], nodeID[:])
+	copy(key[17:], suffix)
+	return key, nil
+}
+
+// EncodeExternalIDReversePrefix returns the range prefix for all external IDs
+// bound to nodeID.
+func EncodeExternalIDReversePrefix(nodeID uuid.UUID) []byte {
+	key := make([]byte, 1+len(nodeID))
+	key[0] = PrefixExternalByNode
+	copy(key[1:], nodeID[:])
+	return key
+}
+
+// DecodeExternalIDKey decodes a forward external-ID key.
+func DecodeExternalIDKey(key []byte) (string, []byte, []byte, error) {
+	if len(key) < 1 || key[0] != PrefixExternalID {
+		return "", nil, nil, ErrInvalidKeyFormat
+	}
+	return decodeExternalIDSuffix(key[1:])
+}
+
+// DecodeExternalIDReverseKey decodes a node-owned cleanup record key.
+func DecodeExternalIDReverseKey(key []byte) (uuid.UUID, string, []byte, []byte, error) {
+	if len(key) < 17 || key[0] != PrefixExternalByNode {
+		return uuid.Nil, "", nil, nil, ErrInvalidKeyFormat
+	}
+	var nodeID uuid.UUID
+	copy(nodeID[:], key[1:17])
+	namespace, scope, value, err := decodeExternalIDSuffix(key[17:])
+	return nodeID, namespace, scope, value, err
+}
+
+// EncodeExternalIDValue stores the internal UUID in a forward lookup record.
+func EncodeExternalIDValue(nodeID uuid.UUID) []byte {
+	return append([]byte(nil), nodeID[:]...)
+}
+
+// DecodeExternalIDValue decodes and validates a forward lookup value.
+func DecodeExternalIDValue(value []byte) (uuid.UUID, error) {
+	if len(value) != len(uuid.UUID{}) {
+		return uuid.Nil, ErrInvalidValueFormat
+	}
+	var nodeID uuid.UUID
+	copy(nodeID[:], value)
+	return nodeID, nil
+}
+
+func encodeExternalIDSuffix(namespace string, scope, value []byte) ([]byte, error) {
+	if len(namespace) == 0 || len(namespace) > MaxExternalIDPartBytes || !utf8.ValidString(namespace) ||
+		len(scope) > MaxExternalIDPartBytes || len(value) == 0 || len(value) > MaxExternalIDPartBytes {
+		return nil, ErrInvalidExternalID
+	}
+
+	suffix := make([]byte, 2+len(namespace)+2+len(scope)+2+len(value))
+	offset := 0
+	binary.BigEndian.PutUint16(suffix[offset:], uint16(len(namespace)))
+	offset += 2
+	copy(suffix[offset:], namespace)
+	offset += len(namespace)
+	binary.BigEndian.PutUint16(suffix[offset:], uint16(len(scope)))
+	offset += 2
+	copy(suffix[offset:], scope)
+	offset += len(scope)
+	binary.BigEndian.PutUint16(suffix[offset:], uint16(len(value)))
+	offset += 2
+	copy(suffix[offset:], value)
+	return suffix, nil
+}
+
+func decodeExternalIDSuffix(suffix []byte) (string, []byte, []byte, error) {
+	readPart := func() ([]byte, bool) {
+		if len(suffix) < 2 {
+			return nil, false
+		}
+		length := int(binary.BigEndian.Uint16(suffix))
+		suffix = suffix[2:]
+		if len(suffix) < length {
+			return nil, false
+		}
+		part := append([]byte(nil), suffix[:length]...)
+		suffix = suffix[length:]
+		return part, true
+	}
+
+	namespace, ok := readPart()
+	if !ok || len(namespace) == 0 || !utf8.Valid(namespace) {
+		return "", nil, nil, ErrInvalidKeyFormat
+	}
+	scope, ok := readPart()
+	if !ok {
+		return "", nil, nil, ErrInvalidKeyFormat
+	}
+	value, ok := readPart()
+	if !ok || len(value) == 0 || len(suffix) != 0 {
+		return "", nil, nil, ErrInvalidKeyFormat
+	}
+	return string(namespace), scope, value, nil
 }
 
 // EncodeEdgeOutKey returns the key for an outgoing edge:

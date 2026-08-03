@@ -1,10 +1,12 @@
 package benchmarks
 
 import (
+	"bytes"
 	"context"
 	"math/rand"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/npclaudiu/pathway"
 )
 
@@ -32,6 +34,39 @@ func BenchmarkGetNode(b *testing.B) {
 			})
 			if err != nil {
 				b.Fatalf("view error: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkResolveExternalID(b *testing.B) {
+	RunBenchmark(b, func(b *testing.B, db *pathway.Database) {
+		externalID, err := pathway.NewExternalID("git-object/sha1", bytes.Repeat([]byte{0x42}, 20))
+		if err != nil {
+			b.Fatal(err)
+		}
+		var expected uuid.UUID
+		if err := db.Update(b.Context(), func(tx *pathway.Tx) error {
+			var err error
+			expected, err = tx.PutNodeByExternalID(externalID, "Commit")
+			return err
+		}); err != nil {
+			b.Fatal(err)
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := db.View(b.Context(), func(tx *pathway.Tx) error {
+				nodeID, exists, err := tx.ResolveExternalID(externalID)
+				if err != nil {
+					return err
+				}
+				if !exists || nodeID != expected {
+					b.Fatalf("resolved node = %s/%v, want %s", nodeID, exists, expected)
+				}
+				return nil
+			}); err != nil {
+				b.Fatal(err)
 			}
 		}
 	})

@@ -15,13 +15,14 @@ import (
 // Tx represents a database transaction.
 // It can be either read-only (created via View) or read-write (created via Update).
 type Tx struct {
-	db       *Database
-	ctx      context.Context
-	batch    *pebble.Batch // For write transactions
-	reader   pebble.Reader // For read transactions
-	readOnly bool
-	closed   bool
-	id       uint64
+	db                *Database
+	ctx               context.Context
+	batch             *pebble.Batch // For write transactions
+	reader            pebble.Reader // For read transactions
+	readOnly          bool
+	closed            bool
+	id                uint64
+	externalIDsLocked bool
 }
 
 // pebbleIterator implements the Iterator interface for pebble.Iterator.
@@ -399,6 +400,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error {
 	if tx.readOnly {
 		return pebble.ErrReadOnly
 	}
+	tx.lockExternalIDs()
 
 	// Get label before deleting for index cleanup
 	lbl, isNode, err := tx.GetNode(id)
@@ -426,6 +428,9 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error {
 					return err
 				}
 			}
+		}
+		if err := tx.deleteExternalIDs(id); err != nil {
+			return err
 		}
 	}
 

@@ -8,7 +8,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-const currentSchemaVersion uint32 = 4
+const currentSchemaVersion uint32 = 5
 
 var schemaVersionKey = []byte("\x00pathway/schema-version")
 

@@ -8,10 +8,13 @@ import "github.com/npclaudiu/pathway"
 
 ## Index
 
+- [Constants](<#constants>)
 - [Variables](<#variables>)
 - [type BulkWriter](<#BulkWriter>)
+  - [func \(w \*BulkWriter\) BindExternalID\(externalID ExternalID, nodeID uuid.UUID\) error](<#BulkWriter.BindExternalID>)
   - [func \(w \*BulkWriter\) PutEdge\(srcID, dstID uuid.UUID, label string\) \(uuid.UUID, error\)](<#BulkWriter.PutEdge>)
   - [func \(w \*BulkWriter\) PutNode\(id uuid.UUID, label string\) error](<#BulkWriter.PutNode>)
+  - [func \(w \*BulkWriter\) PutNodeByExternalID\(externalID ExternalID, label string\) \(uuid.UUID, error\)](<#BulkWriter.PutNodeByExternalID>)
   - [func \(w \*BulkWriter\) SetProperties\(id uuid.UUID, props map\[string\]any\) error](<#BulkWriter.SetProperties>)
 - [type Database](<#Database>)
   - [func Open\(path string\) \(\*Database, error\)](<#Open>)
@@ -26,6 +29,12 @@ import "github.com/npclaudiu/pathway"
 - [type DurabilityMode](<#DurabilityMode>)
 - [type Edge](<#Edge>)
 - [type EdgeIterator](<#EdgeIterator>)
+- [type ExternalID](<#ExternalID>)
+  - [func NewExternalID\(namespace string, value \[\]byte\) \(ExternalID, error\)](<#NewExternalID>)
+  - [func NewScopedExternalID\(namespace string, scope, value \[\]byte\) \(ExternalID, error\)](<#NewScopedExternalID>)
+  - [func \(id ExternalID\) Namespace\(\) string](<#ExternalID.Namespace>)
+  - [func \(id ExternalID\) Scope\(\) \[\]byte](<#ExternalID.Scope>)
+  - [func \(id ExternalID\) Value\(\) \[\]byte](<#ExternalID.Value>)
 - [type IndexDefinition](<#IndexDefinition>)
 - [type Iterator](<#Iterator>)
 - [type Logger](<#Logger>)
@@ -77,9 +86,11 @@ import "github.com/npclaudiu/pathway"
 - [type TraversalSource](<#TraversalSource>)
   - [func NewTraversalSource\(db \*Database\) \*TraversalSource](<#NewTraversalSource>)
   - [func \(ts \*TraversalSource\) V\(ids ...uuid.UUID\) \*TraversalPipeline](<#TraversalSource.V>)
+  - [func \(ts \*TraversalSource\) VExternal\(ids ...ExternalID\) \(\*TraversalPipeline, error\)](<#TraversalSource.VExternal>)
   - [func \(ts \*TraversalSource\) VStrings\(ids ...string\) \(\*TraversalPipeline, error\)](<#TraversalSource.VStrings>)
 - [type Tx](<#Tx>)
   - [func \(tx \*Tx\) Access\(fn func\(tx \*Tx\) error\) error](<#Tx.Access>)
+  - [func \(tx \*Tx\) BindExternalID\(externalID ExternalID, nodeID uuid.UUID\) error](<#Tx.BindExternalID>)
   - [func \(tx \*Tx\) Close\(\) error](<#Tx.Close>)
   - [func \(tx \*Tx\) Delete\(key \[\]byte, opts \*pebble.WriteOptions\) error](<#Tx.Delete>)
   - [func \(tx \*Tx\) DeleteEdge\(edgeID uuid.UUID\) error](<#Tx.DeleteEdge>)
@@ -94,10 +105,21 @@ import "github.com/npclaudiu/pathway"
   - [func \(tx \*Tx\) OutEdges\(id uuid.UUID, labels ...string\) EdgeIterator](<#Tx.OutEdges>)
   - [func \(tx \*Tx\) PutEdge\(srcID, dstID uuid.UUID, label string\) \(uuid.UUID, error\)](<#Tx.PutEdge>)
   - [func \(tx \*Tx\) PutNode\(id uuid.UUID, label string\) error](<#Tx.PutNode>)
+  - [func \(tx \*Tx\) PutNodeByExternalID\(externalID ExternalID, label string\) \(uuid.UUID, error\)](<#Tx.PutNodeByExternalID>)
+  - [func \(tx \*Tx\) ResolveExternalID\(externalID ExternalID\) \(uuid.UUID, bool, error\)](<#Tx.ResolveExternalID>)
   - [func \(tx \*Tx\) ScanNodes\(\) NodeIterator](<#Tx.ScanNodes>)
   - [func \(tx \*Tx\) Set\(key, value \[\]byte, opts \*pebble.WriteOptions\) error](<#Tx.Set>)
   - [func \(tx \*Tx\) SetProperties\(id uuid.UUID, props map\[string\]interface\{\}\) error](<#Tx.SetProperties>)
+  - [func \(tx \*Tx\) UnbindExternalID\(externalID ExternalID\) error](<#Tx.UnbindExternalID>)
 
+
+## Constants
+
+<a name="MaxExternalIDPartBytes"></a>MaxExternalIDPartBytes is the maximum encoded byte length of an ExternalID namespace, scope, or value. Namespaces and values must also be non\-empty.
+
+```go
+const MaxExternalIDPartBytes = 65_535
+```
 
 ## Variables
 
@@ -105,17 +127,20 @@ import "github.com/npclaudiu/pathway"
 
 ```go
 var (
-    ErrInvalidDatabase   = errors.New("invalid database instance")
-    ErrInvalidSnapshot   = errors.New("invalid snapshot instance")
-    ErrKeyNotFound       = errors.New("key not found")
-    ErrNodeNotFound      = errors.New("node not found")
-    ErrEdgeNotFound      = errors.New("edge not found")
-    ErrEntityNotFound    = errors.New("node or edge not found")
-    ErrInvalidNodeID     = errors.New("invalid textual node ID")
-    ErrTraversalResult   = errors.New("unexpected traversal result type")
-    ErrDanglingEdge      = errors.New("cannot create edge: source or target node does not exist")
-    ErrUnsupportedSchema = errors.New("unsupported pathway storage schema")
-    ErrInvalidDurability = errors.New("invalid durability mode")
+    ErrInvalidDatabase    = errors.New("invalid database instance")
+    ErrInvalidSnapshot    = errors.New("invalid snapshot instance")
+    ErrKeyNotFound        = errors.New("key not found")
+    ErrNodeNotFound       = errors.New("node not found")
+    ErrEdgeNotFound       = errors.New("edge not found")
+    ErrEntityNotFound     = errors.New("node or edge not found")
+    ErrInvalidNodeID      = errors.New("invalid textual node ID")
+    ErrTraversalResult    = errors.New("unexpected traversal result type")
+    ErrInvalidExternalID  = errors.New("invalid external ID")
+    ErrExternalIDConflict = errors.New("external ID is already bound to another node")
+    ErrExternalIDCorrupt  = errors.New("corrupt external ID records")
+    ErrDanglingEdge       = errors.New("cannot create edge: source or target node does not exist")
+    ErrUnsupportedSchema  = errors.New("unsupported pathway storage schema")
+    ErrInvalidDurability  = errors.New("invalid durability mode")
 )
 ```
 
@@ -130,8 +155,17 @@ type BulkWriter struct {
 }
 ```
 
+<a name="BulkWriter.BindExternalID"></a>
+### func \(\*BulkWriter\) [BindExternalID](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L70>)
+
+```go
+func (w *BulkWriter) BindExternalID(externalID ExternalID, nodeID uuid.UUID) error
+```
+
+BindExternalID binds an external identity to a node in the current bulk transaction. Repeating the same binding is idempotent.
+
 <a name="BulkWriter.PutEdge"></a>
-### func \(\*BulkWriter\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L56>)
+### func \(\*BulkWriter\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L84>)
 
 ```go
 func (w *BulkWriter) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error)
@@ -148,8 +182,17 @@ func (w *BulkWriter) PutNode(id uuid.UUID, label string) error
 
 PutNode stages a node upsert and makes the node immediately available to later PutEdge calls in the same bulk callback.
 
+<a name="BulkWriter.PutNodeByExternalID"></a>
+### func \(\*BulkWriter\) [PutNodeByExternalID](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L56>)
+
+```go
+func (w *BulkWriter) PutNodeByExternalID(externalID ExternalID, label string) (uuid.UUID, error)
+```
+
+PutNodeByExternalID resolves or creates an externally identified node and makes its internal UUID immediately available to later bulk operations. Replaying the same external ID returns the same UUID.
+
 <a name="BulkWriter.SetProperties"></a>
-### func \(\*BulkWriter\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L78>)
+### func \(\*BulkWriter\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L106>)
 
 ```go
 func (w *BulkWriter) SetProperties(id uuid.UUID, props map[string]any) error
@@ -158,7 +201,7 @@ func (w *BulkWriter) SetProperties(id uuid.UUID, props map[string]any) error
 SetProperties completely replaces an existing node or edge's properties in the current bulk transaction.
 
 <a name="Database"></a>
-## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L85-L91>)
+## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L86-L93>)
 
 Database represents a connection to the embedded graph database. It is safe for concurrent use by multiple goroutines.
 
@@ -169,7 +212,7 @@ type Database struct {
 ```
 
 <a name="Open"></a>
-### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L102>)
+### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L104>)
 
 ```go
 func Open(path string) (*Database, error)
@@ -188,7 +231,7 @@ db, err := pathway.Open(":memory:")
 ```
 
 <a name="OpenWithOptions"></a>
-### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L109>)
+### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L111>)
 
 ```go
 func OpenWithOptions(path string, opts Options) (*Database, error)
@@ -206,7 +249,7 @@ func (d *Database) BulkUpdate(ctx context.Context, fn func(writer *BulkWriter) e
 BulkUpdate stages nodes, edges, and properties in one transaction and commits them once with the database's configured durability. Any writer operation or callback error rolls back the complete batch, including errors the callback did not explicitly return.
 
 <a name="Database.Close"></a>
-### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L155>)
+### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L157>)
 
 ```go
 func (d *Database) Close() error
@@ -215,7 +258,7 @@ func (d *Database) Close() error
 Close closes the database connection and releases all resources. It is important to call Close\(\) to ensure all data is flushed to disk \(if persistent\) and locks are released.
 
 <a name="Database.Compact"></a>
-### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L241>)
+### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L244>)
 
 ```go
 func (g *Database) Compact(ctx context.Context) error
@@ -224,7 +267,7 @@ func (g *Database) Compact(ctx context.Context) error
 Compact triggers Pebble's manual compaction for the entire key range. It can be used to reclaim disk space after deleting a large number of nodes or edges. Note: This operation can be expensive and should typically not be run during high load.
 
 <a name="Database.NewReadTx"></a>
-### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L217>)
+### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L220>)
 
 ```go
 func (d *Database) NewReadTx(ctx context.Context) (*Tx, error)
@@ -242,7 +285,7 @@ func (g *Database) NewSnapshot(ctx context.Context) (*Snapshot, error)
 NewSnapshot creates a snapshot of the current database state. The snapshot is tied to the lifetime of the underlying Graph \(Database\) instance.
 
 <a name="Database.Update"></a>
-### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L169>)
+### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L171>)
 
 ```go
 func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error
@@ -259,7 +302,7 @@ err := db.Update(ctx, func(tx *pathway.Tx) error {
 ```
 
 <a name="Database.View"></a>
-### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L199>)
+### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L202>)
 
 ```go
 func (d *Database) View(ctx context.Context, fn func(tx *Tx) error) error
@@ -278,7 +321,7 @@ err := db.View(ctx, func(tx *pathway.Tx) error {
 ```
 
 <a name="DurabilityMode"></a>
-## type [DurabilityMode](<https://github.com/npclaudiu/pathway/blob/main/database.go#L31>)
+## type [DurabilityMode](<https://github.com/npclaudiu/pathway/blob/main/database.go#L32>)
 
 DurabilityMode controls whether Update synchronizes its commit to stable storage before returning.
 
@@ -329,8 +372,66 @@ type EdgeIterator interface {
 }
 ```
 
+<a name="ExternalID"></a>
+## type [ExternalID](<https://github.com/npclaudiu/pathway/blob/main/external_id.go#L25-L29>)
+
+ExternalID is an immutable, namespaced identifier owned by an external data source. Namespace is exact, case\-sensitive UTF\-8; Pathway performs no Unicode normalization. Scope and Value are opaque bytes compared exactly. Scope may be empty, while Namespace and Value must contain 1..MaxExternalIDPartBytes bytes.
+
+Use distinct namespaces for identifiers with different canonical forms. For example, Git SHA\-1 and SHA\-256 object IDs should use different namespaces and store the raw digest in Value. Repository\-local identities should put the canonical repository identity in Scope instead of concatenating it with the digest.
+
+```go
+type ExternalID struct {
+    // contains filtered or unexported fields
+}
+```
+
+<a name="NewExternalID"></a>
+### func [NewExternalID](<https://github.com/npclaudiu/pathway/blob/main/external_id.go#L33>)
+
+```go
+func NewExternalID(namespace string, value []byte) (ExternalID, error)
+```
+
+NewExternalID constructs a global external ID and takes an owned copy of value.
+
+<a name="NewScopedExternalID"></a>
+### func [NewScopedExternalID](<https://github.com/npclaudiu/pathway/blob/main/external_id.go#L40>)
+
+```go
+func NewScopedExternalID(namespace string, scope, value []byte) (ExternalID, error)
+```
+
+NewScopedExternalID constructs an external ID and takes owned copies of scope and value. Exact bytes are canonical: Pathway does not trim, fold, decode, hash, or otherwise normalize any component.
+
+<a name="ExternalID.Namespace"></a>
+### func \(ExternalID\) [Namespace](<https://github.com/npclaudiu/pathway/blob/main/external_id.go#L52>)
+
+```go
+func (id ExternalID) Namespace() string
+```
+
+Namespace returns the exact, case\-sensitive namespace.
+
+<a name="ExternalID.Scope"></a>
+### func \(ExternalID\) [Scope](<https://github.com/npclaudiu/pathway/blob/main/external_id.go#L55>)
+
+```go
+func (id ExternalID) Scope() []byte
+```
+
+Scope returns an owned copy of the optional opaque scope.
+
+<a name="ExternalID.Value"></a>
+### func \(ExternalID\) [Value](<https://github.com/npclaudiu/pathway/blob/main/external_id.go#L58>)
+
+```go
+func (id ExternalID) Value() []byte
+```
+
+Value returns an owned copy of the opaque identifier value.
+
 <a name="IndexDefinition"></a>
-## type [IndexDefinition](<https://github.com/npclaudiu/pathway/blob/main/database.go#L24-L27>)
+## type [IndexDefinition](<https://github.com/npclaudiu/pathway/blob/main/database.go#L25-L28>)
 
 IndexDefinition identifies one node label/property pair that should have an exact\-match property index.
 
@@ -369,7 +470,7 @@ type Iterator interface {
 ```
 
 <a name="Logger"></a>
-## type [Logger](<https://github.com/npclaudiu/pathway/blob/main/database.go#L15-L20>)
+## type [Logger](<https://github.com/npclaudiu/pathway/blob/main/database.go#L16-L21>)
 
 Logger defines a simple logging interface for internal database logs. It allows users to plug in their own logging implementation \(e.g., standard log, zap, logrus\).
 
@@ -417,7 +518,7 @@ type NodePredicate func(Node) bool
 ```
 
 <a name="Options"></a>
-## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L53-L81>)
+## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L54-L82>)
 
 Options configuration for the database.
 
@@ -583,7 +684,7 @@ pathway.Prefix("User-")
 ```
 
 <a name="RepeatConfig"></a>
-## type [RepeatConfig](<https://github.com/npclaudiu/pathway/blob/main/query.go#L113-L118>)
+## type [RepeatConfig](<https://github.com/npclaudiu/pathway/blob/main/query.go#L146-L151>)
 
 RepeatConfig holds configuration for repeat steps \(loops\).
 
@@ -623,7 +724,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error)
 Get returns a Pebble reader that can be used to read keys from the snapshot.
 
 <a name="Step"></a>
-## type [Step](<https://github.com/npclaudiu/pathway/blob/main/query.go#L110>)
+## type [Step](<https://github.com/npclaudiu/pathway/blob/main/query.go#L143>)
 
 Step defines a processing step in the traversal pipeline. It takes a transaction context and a previous iterator, and returns a new iterator.
 
@@ -642,7 +743,7 @@ type Traversal struct {
 ```
 
 <a name="TraversalPipeline"></a>
-## type [TraversalPipeline](<https://github.com/npclaudiu/pathway/blob/main/query.go#L121-L125>)
+## type [TraversalPipeline](<https://github.com/npclaudiu/pathway/blob/main/query.go#L154-L158>)
 
 TraversalPipeline represents a chain of query steps.
 
@@ -653,7 +754,7 @@ type TraversalPipeline struct {
 ```
 
 <a name="TraversalPipeline.Each"></a>
-### func \(\*TraversalPipeline\) [Each](<https://github.com/npclaudiu/pathway/blob/main/query.go#L294>)
+### func \(\*TraversalPipeline\) [Each](<https://github.com/npclaudiu/pathway/blob/main/query.go#L327>)
 
 ```go
 func (tp *TraversalPipeline) Each(ctx context.Context, yield func(any) error) (err error)
@@ -664,7 +765,7 @@ Each executes the traversal pipeline and calls yield once for every result. It s
 Unprojected nodes and edges are passed as Node and Edge values. IDs emits uuid.UUID, Path emits Path, and Values emits the dynamic property types documented by Predicate. The values passed to yield own their data and remain valid after yield returns. Prefer a typed EachNode, EachEdge, EachPath, or EachID terminal for statically typed results.
 
 <a name="TraversalPipeline.EachEdge"></a>
-### func \(\*TraversalPipeline\) [EachEdge](<https://github.com/npclaudiu/pathway/blob/main/query.go#L306>)
+### func \(\*TraversalPipeline\) [EachEdge](<https://github.com/npclaudiu/pathway/blob/main/query.go#L339>)
 
 ```go
 func (tp *TraversalPipeline) EachEdge(ctx context.Context, yield func(Edge) error) error
@@ -673,7 +774,7 @@ func (tp *TraversalPipeline) EachEdge(ctx context.Context, yield func(Edge) erro
 EachEdge executes an edge traversal and calls yield for every Edge. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.EachID"></a>
-### func \(\*TraversalPipeline\) [EachID](<https://github.com/npclaudiu/pathway/blob/main/query.go#L319>)
+### func \(\*TraversalPipeline\) [EachID](<https://github.com/npclaudiu/pathway/blob/main/query.go#L352>)
 
 ```go
 func (tp *TraversalPipeline) EachID(ctx context.Context, yield func(uuid.UUID) error) error
@@ -682,7 +783,7 @@ func (tp *TraversalPipeline) EachID(ctx context.Context, yield func(uuid.UUID) e
 EachID executes a traversal ending in IDs and calls yield for every UUID. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.EachNode"></a>
-### func \(\*TraversalPipeline\) [EachNode](<https://github.com/npclaudiu/pathway/blob/main/query.go#L300>)
+### func \(\*TraversalPipeline\) [EachNode](<https://github.com/npclaudiu/pathway/blob/main/query.go#L333>)
 
 ```go
 func (tp *TraversalPipeline) EachNode(ctx context.Context, yield func(Node) error) error
@@ -691,7 +792,7 @@ func (tp *TraversalPipeline) EachNode(ctx context.Context, yield func(Node) erro
 EachNode executes a node traversal and calls yield for every Node. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.EachPath"></a>
-### func \(\*TraversalPipeline\) [EachPath](<https://github.com/npclaudiu/pathway/blob/main/query.go#L313>)
+### func \(\*TraversalPipeline\) [EachPath](<https://github.com/npclaudiu/pathway/blob/main/query.go#L346>)
 
 ```go
 func (tp *TraversalPipeline) EachPath(ctx context.Context, yield func(Path) error) error
@@ -700,7 +801,7 @@ func (tp *TraversalPipeline) EachPath(ctx context.Context, yield func(Path) erro
 EachPath executes a traversal ending in Path and calls yield for every Path. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.Emit"></a>
-### func \(\*TraversalPipeline\) [Emit](<https://github.com/npclaudiu/pathway/blob/main/query.go#L232>)
+### func \(\*TraversalPipeline\) [Emit](<https://github.com/npclaudiu/pathway/blob/main/query.go#L265>)
 
 ```go
 func (tp *TraversalPipeline) Emit() *TraversalPipeline
@@ -709,7 +810,7 @@ func (tp *TraversalPipeline) Emit() *TraversalPipeline
 Emit causes the Repeat loop to emit the current element at each iteration, effectively returning intermediate results as well as the final results.
 
 <a name="TraversalPipeline.HasLabel"></a>
-### func \(\*TraversalPipeline\) [HasLabel](<https://github.com/npclaudiu/pathway/blob/main/query.go#L180>)
+### func \(\*TraversalPipeline\) [HasLabel](<https://github.com/npclaudiu/pathway/blob/main/query.go#L213>)
 
 ```go
 func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline
@@ -718,7 +819,7 @@ func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline
 HasLabel filters the current node stream, keeping only nodes with one of the specified labels.
 
 <a name="TraversalPipeline.IDs"></a>
-### func \(\*TraversalPipeline\) [IDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L262>)
+### func \(\*TraversalPipeline\) [IDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L295>)
 
 ```go
 func (tp *TraversalPipeline) IDs() *TraversalPipeline
@@ -727,7 +828,7 @@ func (tp *TraversalPipeline) IDs() *TraversalPipeline
 IDs projects UUIDs from the current node stream. Unlike materializing nodes with ToNodes, this projection does not load node labels. Collect the result with ToIDs or stream it with EachID.
 
 <a name="TraversalPipeline.In"></a>
-### func \(\*TraversalPipeline\) [In](<https://github.com/npclaudiu/pathway/blob/main/query.go#L167>)
+### func \(\*TraversalPipeline\) [In](<https://github.com/npclaudiu/pathway/blob/main/query.go#L200>)
 
 ```go
 func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline
@@ -742,7 +843,7 @@ g.V().In("EMPLOYED_BY")...
 ```
 
 <a name="TraversalPipeline.Out"></a>
-### func \(\*TraversalPipeline\) [Out](<https://github.com/npclaudiu/pathway/blob/main/query.go#L136>)
+### func \(\*TraversalPipeline\) [Out](<https://github.com/npclaudiu/pathway/blob/main/query.go#L169>)
 
 ```go
 func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline
@@ -757,7 +858,7 @@ g.V().Out("KNOWS")...
 ```
 
 <a name="TraversalPipeline.Path"></a>
-### func \(\*TraversalPipeline\) [Path](<https://github.com/npclaudiu/pathway/blob/main/query.go#L245>)
+### func \(\*TraversalPipeline\) [Path](<https://github.com/npclaudiu/pathway/blob/main/query.go#L278>)
 
 ```go
 func (tp *TraversalPipeline) Path() *TraversalPipeline
@@ -770,7 +871,7 @@ g.V().Out().Path()
 ```
 
 <a name="TraversalPipeline.Repeat"></a>
-### func \(\*TraversalPipeline\) [Repeat](<https://github.com/npclaudiu/pathway/blob/main/query.go#L213>)
+### func \(\*TraversalPipeline\) [Repeat](<https://github.com/npclaudiu/pathway/blob/main/query.go#L246>)
 
 ```go
 func (tp *TraversalPipeline) Repeat(sub func(*TraversalPipeline) *TraversalPipeline) *TraversalPipeline
@@ -786,7 +887,7 @@ g.V().Repeat(func(t *TraversalPipeline) { return t.Out("KNOWS") }).Times(2)
 ```
 
 <a name="TraversalPipeline.Times"></a>
-### func \(\*TraversalPipeline\) [Times](<https://github.com/npclaudiu/pathway/blob/main/query.go#L223>)
+### func \(\*TraversalPipeline\) [Times](<https://github.com/npclaudiu/pathway/blob/main/query.go#L256>)
 
 ```go
 func (tp *TraversalPipeline) Times(n int) *TraversalPipeline
@@ -795,7 +896,7 @@ func (tp *TraversalPipeline) Times(n int) *TraversalPipeline
 Times terminates a Repeat loop after a fixed number of iterations.
 
 <a name="TraversalPipeline.ToEdges"></a>
-### func \(\*TraversalPipeline\) [ToEdges](<https://github.com/npclaudiu/pathway/blob/main/query.go#L492>)
+### func \(\*TraversalPipeline\) [ToEdges](<https://github.com/npclaudiu/pathway/blob/main/query.go#L525>)
 
 ```go
 func (tp *TraversalPipeline) ToEdges() ([]Edge, error)
@@ -804,7 +905,7 @@ func (tp *TraversalPipeline) ToEdges() ([]Edge, error)
 ToEdges executes an edge traversal and returns its materialized Edge values. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachEdge to consume large edge result sets with bounded memory.
 
 <a name="TraversalPipeline.ToEdgesContext"></a>
-### func \(\*TraversalPipeline\) [ToEdgesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L497>)
+### func \(\*TraversalPipeline\) [ToEdgesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L530>)
 
 ```go
 func (tp *TraversalPipeline) ToEdgesContext(ctx context.Context) ([]Edge, error)
@@ -813,7 +914,7 @@ func (tp *TraversalPipeline) ToEdgesContext(ctx context.Context) ([]Edge, error)
 ToEdgesContext is ToEdges with cancellation and observability context.
 
 <a name="TraversalPipeline.ToIDs"></a>
-### func \(\*TraversalPipeline\) [ToIDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L516>)
+### func \(\*TraversalPipeline\) [ToIDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L549>)
 
 ```go
 func (tp *TraversalPipeline) ToIDs() ([]uuid.UUID, error)
@@ -822,7 +923,7 @@ func (tp *TraversalPipeline) ToIDs() ([]uuid.UUID, error)
 ToIDs executes a traversal ending in IDs and returns typed UUID values. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachID to consume large ID result sets with bounded memory.
 
 <a name="TraversalPipeline.ToIDsContext"></a>
-### func \(\*TraversalPipeline\) [ToIDsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L521>)
+### func \(\*TraversalPipeline\) [ToIDsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L554>)
 
 ```go
 func (tp *TraversalPipeline) ToIDsContext(ctx context.Context) ([]uuid.UUID, error)
@@ -831,7 +932,7 @@ func (tp *TraversalPipeline) ToIDsContext(ctx context.Context) ([]uuid.UUID, err
 ToIDsContext is ToIDs with cancellation and observability context.
 
 <a name="TraversalPipeline.ToList"></a>
-### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L451>)
+### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L484>)
 
 ```go
 func (tp *TraversalPipeline) ToList() (results []any, err error)
@@ -840,7 +941,7 @@ func (tp *TraversalPipeline) ToList() (results []any, err error)
 ToList executes the traversal pipeline and returns dynamic materialized results. Nodes use Node, edges use Edge, IDs uses uuid.UUID, Path uses Path, and Values uses the property types documented by Predicate. Prefer ToNodes, ToEdges, ToIDs, or ToPaths for statically typed results. To consume dynamic results with bounded memory, use Each.
 
 <a name="TraversalPipeline.ToListContext"></a>
-### func \(\*TraversalPipeline\) [ToListContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L458>)
+### func \(\*TraversalPipeline\) [ToListContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L491>)
 
 ```go
 func (tp *TraversalPipeline) ToListContext(ctx context.Context) (results []any, err error)
@@ -849,7 +950,7 @@ func (tp *TraversalPipeline) ToListContext(ctx context.Context) (results []any, 
 ToListContext executes the traversal pipeline with ctx and returns materialized results. Cancellation stops planning, reads, scans, repeats, and result collection, and is propagated to observability hooks.
 
 <a name="TraversalPipeline.ToNodes"></a>
-### func \(\*TraversalPipeline\) [ToNodes](<https://github.com/npclaudiu/pathway/blob/main/query.go#L480>)
+### func \(\*TraversalPipeline\) [ToNodes](<https://github.com/npclaudiu/pathway/blob/main/query.go#L513>)
 
 ```go
 func (tp *TraversalPipeline) ToNodes() ([]Node, error)
@@ -858,7 +959,7 @@ func (tp *TraversalPipeline) ToNodes() ([]Node, error)
 ToNodes executes a node traversal and returns its materialized Node values. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachNode to consume large node result sets with bounded memory.
 
 <a name="TraversalPipeline.ToNodesContext"></a>
-### func \(\*TraversalPipeline\) [ToNodesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L485>)
+### func \(\*TraversalPipeline\) [ToNodesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L518>)
 
 ```go
 func (tp *TraversalPipeline) ToNodesContext(ctx context.Context) ([]Node, error)
@@ -867,7 +968,7 @@ func (tp *TraversalPipeline) ToNodesContext(ctx context.Context) ([]Node, error)
 ToNodesContext is ToNodes with cancellation and observability context.
 
 <a name="TraversalPipeline.ToPaths"></a>
-### func \(\*TraversalPipeline\) [ToPaths](<https://github.com/npclaudiu/pathway/blob/main/query.go#L504>)
+### func \(\*TraversalPipeline\) [ToPaths](<https://github.com/npclaudiu/pathway/blob/main/query.go#L537>)
 
 ```go
 func (tp *TraversalPipeline) ToPaths() ([]Path, error)
@@ -876,7 +977,7 @@ func (tp *TraversalPipeline) ToPaths() ([]Path, error)
 ToPaths executes a traversal ending in Path and returns typed path snapshots. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachPath to consume large path result sets with bounded memory.
 
 <a name="TraversalPipeline.ToPathsContext"></a>
-### func \(\*TraversalPipeline\) [ToPathsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L509>)
+### func \(\*TraversalPipeline\) [ToPathsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L542>)
 
 ```go
 func (tp *TraversalPipeline) ToPathsContext(ctx context.Context) ([]Path, error)
@@ -885,7 +986,7 @@ func (tp *TraversalPipeline) ToPathsContext(ctx context.Context) ([]Path, error)
 ToPathsContext is ToPaths with cancellation and observability context.
 
 <a name="TraversalPipeline.Until"></a>
-### func \(\*TraversalPipeline\) [Until](<https://github.com/npclaudiu/pathway/blob/main/query.go#L197>)
+### func \(\*TraversalPipeline\) [Until](<https://github.com/npclaudiu/pathway/blob/main/query.go#L230>)
 
 ```go
 func (tp *TraversalPipeline) Until(pred NodePredicate) *TraversalPipeline
@@ -894,7 +995,7 @@ func (tp *TraversalPipeline) Until(pred NodePredicate) *TraversalPipeline
 Until terminates the active Repeat when pred returns true for the current materialized Node. Calling Until without an active Repeat has no effect.
 
 <a name="TraversalPipeline.Values"></a>
-### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L273>)
+### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L306>)
 
 ```go
 func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline
@@ -947,6 +1048,15 @@ g.V(id).Out()...
 g.V().HasLabel("Person")...
 ```
 
+<a name="TraversalSource.VExternal"></a>
+### func \(\*TraversalSource\) [VExternal](<https://github.com/npclaudiu/pathway/blob/main/query.go#L112>)
+
+```go
+func (ts *TraversalSource) VExternal(ids ...ExternalID) (*TraversalPipeline, error)
+```
+
+VExternal resolves external identities and starts a traversal at their internal nodes, preserving caller order and skipping unbound identities. An empty argument list scans all nodes, matching V. Each external start adds a forward lookup and reverse\-consistency check before normal node loading.
+
 <a name="TraversalSource.VStrings"></a>
 ### func \(\*TraversalSource\) [VStrings](<https://github.com/npclaudiu/pathway/blob/main/query.go#L96>)
 
@@ -957,7 +1067,7 @@ func (ts *TraversalSource) VStrings(ids ...string) (*TraversalPipeline, error)
 VStrings parses textual UUIDs and starts a traversal at those nodes. It returns ErrInvalidNodeID if any value is malformed; no partial traversal is constructed. Prefer V when UUIDs are already available.
 
 <a name="Tx"></a>
-## type [Tx](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L17-L25>)
+## type [Tx](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L17-L26>)
 
 Tx represents a database transaction. It can be either read\-only \(created via View\) or read\-write \(created via Update\).
 
@@ -968,7 +1078,7 @@ type Tx struct {
 ```
 
 <a name="Tx.Access"></a>
-### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L160>)
+### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L161>)
 
 ```go
 func (tx *Tx) Access(fn func(tx *Tx) error) error
@@ -976,8 +1086,17 @@ func (tx *Tx) Access(fn func(tx *Tx) error) error
 
 Access allows executing a function within the transaction context. Useful for executing multiple operations on the same transaction \(e.g. Iterators\).
 
+<a name="Tx.BindExternalID"></a>
+### func \(\*Tx\) [BindExternalID](<https://github.com/npclaudiu/pathway/blob/main/external_id_tx.go#L23>)
+
+```go
+func (tx *Tx) BindExternalID(externalID ExternalID, nodeID uuid.UUID) error
+```
+
+BindExternalID atomically binds externalID to an existing node. Repeating the same binding is idempotent. Binding an existing external ID to a different node returns ErrExternalIDConflict.
+
 <a name="Tx.Close"></a>
-### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L168>)
+### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L169>)
 
 ```go
 func (tx *Tx) Close() error
@@ -986,7 +1105,7 @@ func (tx *Tx) Close() error
 Close closes the transaction. This releases the underlying snapshot. For write transactions \(Update\), it's a no\-op as the batch is managed by the DB.Update method, but for read\-only \(View/NewReadTx\), it releases the read lease.
 
 <a name="Tx.Delete"></a>
-### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L151>)
+### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L152>)
 
 ```go
 func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
@@ -995,7 +1114,7 @@ func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
 Delete deletes the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.DeleteEdge"></a>
-### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L469>)
+### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L474>)
 
 ```go
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
@@ -1004,7 +1123,7 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
 DeleteEdge removes a specific edge, including both adjacency records, its reverse\-index record, and its properties.
 
 <a name="Tx.DeleteNode"></a>
-### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L398>)
+### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L399>)
 
 ```go
 func (tx *Tx) DeleteNode(id uuid.UUID) error
@@ -1013,7 +1132,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error
 DeleteNode deletes a node and all its incident edges \(both outgoing and incoming\), including each edge's reverse\-index entry and properties. Its cost is linear in the node's degree.
 
 <a name="Tx.FindNodes"></a>
-### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L657>)
+### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L662>)
 
 ```go
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator
@@ -1022,7 +1141,7 @@ func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterat
 FindNodes performs an exact typed lookup in a node\-property index configured through Options.Indexes. An unindexed label/property pair returns no results. String, numeric, and boolean values are distinct; value prefixes do not match. The iterator reports an encoding error if label or propKey exceeds 65,535 bytes.
 
 <a name="Tx.Get"></a>
-### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L105>)
+### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L106>)
 
 ```go
 func (tx *Tx) Get(key []byte) ([]byte, error)
@@ -1031,7 +1150,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error)
 Get retrieves the raw value for a given key. It handles the difference between read\-only readers and write batches.
 
 <a name="Tx.GetNode"></a>
-### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L547>)
+### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L552>)
 
 ```go
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
@@ -1040,7 +1159,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
 GetNode retrieves a node's label by its ID. Returns the label, a boolean indicating existence, and any error.
 
 <a name="Tx.GetProperties"></a>
-### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L564>)
+### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L569>)
 
 ```go
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
@@ -1049,7 +1168,7 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
 GetProperties retrieves the properties map for a given node or edge ID. Signed integers are returned as int64, unsigned integers as uint64, and floats as float64. Returns nil if no properties exist.
 
 <a name="Tx.InEdges"></a>
-### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L604>)
+### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L609>)
 
 ```go
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -1067,7 +1186,7 @@ func (tx *Tx) Load(id uuid.UUID, dest interface{}) error
 Load populates the destination struct with properties from the node/edge with the given ID. dest must be a pointer to a struct.
 
 <a name="Tx.NewIterator"></a>
-### func \(\*Tx\) [NewIterator](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L79>)
+### func \(\*Tx\) [NewIterator](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L80>)
 
 ```go
 func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
@@ -1076,7 +1195,7 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
 NewIterator creates a new low\-level iterator for the transaction. This is primarily for internal use; users should typically use high\-level iterators like ScanNodes, OutEdges, etc.
 
 <a name="Tx.OutEdges"></a>
-### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L592>)
+### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L597>)
 
 ```go
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -1093,7 +1212,7 @@ for iter.Next() { ... }
 ```
 
 <a name="Tx.PutEdge"></a>
-### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L251>)
+### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L252>)
 
 ```go
 func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error)
@@ -1110,7 +1229,7 @@ edgeID, err := tx.PutEdge(srcID, dstID, "KNOWS")
 ```
 
 <a name="Tx.PutNode"></a>
-### func \(\*Tx\) [PutNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L186>)
+### func \(\*Tx\) [PutNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L187>)
 
 ```go
 func (tx *Tx) PutNode(id uuid.UUID, label string) error
@@ -1125,8 +1244,26 @@ id := uuid.New()
 err := tx.PutNode(id, "Person")
 ```
 
+<a name="Tx.PutNodeByExternalID"></a>
+### func \(\*Tx\) [PutNodeByExternalID](<https://github.com/npclaudiu/pathway/blob/main/external_id_tx.go#L79>)
+
+```go
+func (tx *Tx) PutNodeByExternalID(externalID ExternalID, label string) (uuid.UUID, error)
+```
+
+PutNodeByExternalID atomically resolves or creates the node identified by externalID, updates its label, and returns its stable internal UUID. Repeated imports of the same external ID are idempotent.
+
+<a name="Tx.ResolveExternalID"></a>
+### func \(\*Tx\) [ResolveExternalID](<https://github.com/npclaudiu/pathway/blob/main/external_id_tx.go#L16>)
+
+```go
+func (tx *Tx) ResolveExternalID(externalID ExternalID) (uuid.UUID, bool, error)
+```
+
+ResolveExternalID returns the internal UUID bound to externalID. The boolean is false when no binding exists. Dangling or inconsistent forward/reverse records return ErrExternalIDCorrupt.
+
 <a name="Tx.ScanNodes"></a>
-### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L678>)
+### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L683>)
 
 ```go
 func (tx *Tx) ScanNodes() NodeIterator
@@ -1135,7 +1272,7 @@ func (tx *Tx) ScanNodes() NodeIterator
 ScanNodes scans all nodes in the database. This is a full table scan and can be slow for large datasets.
 
 <a name="Tx.Set"></a>
-### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L142>)
+### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L143>)
 
 ```go
 func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
@@ -1144,7 +1281,7 @@ func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
 Set sets the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.SetProperties"></a>
-### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L321>)
+### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L322>)
 
 ```go
 func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error
@@ -1160,5 +1297,14 @@ err := tx.SetProperties(id, map[string]interface{}{
     "age":  30,
 })
 ```
+
+<a name="Tx.UnbindExternalID"></a>
+### func \(\*Tx\) [UnbindExternalID](<https://github.com/npclaudiu/pathway/blob/main/external_id_tx.go#L52>)
+
+```go
+func (tx *Tx) UnbindExternalID(externalID ExternalID) error
+```
+
+UnbindExternalID atomically removes an external\-ID binding. Removing a binding that does not exist succeeds.
 
 Generated by [gomarkdoc](<https://github.com/princjef/gomarkdoc>)

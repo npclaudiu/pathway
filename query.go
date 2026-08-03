@@ -105,6 +105,39 @@ func (ts *TraversalSource) VStrings(ids ...string) (*TraversalPipeline, error) {
 	return ts.V(parsed...), nil
 }
 
+// VExternal resolves external identities and starts a traversal at their
+// internal nodes, preserving caller order and skipping unbound identities. An
+// empty argument list scans all nodes, matching V. Each external start adds a
+// forward lookup and reverse-consistency check before normal node loading.
+func (ts *TraversalSource) VExternal(ids ...ExternalID) (*TraversalPipeline, error) {
+	ownedIDs := make([]ExternalID, len(ids))
+	for i, id := range ids {
+		if err := id.validate(); err != nil {
+			return nil, fmt.Errorf("external ID at position %d: %w", i, err)
+		}
+		ownedIDs[i] = id.clone()
+	}
+	return &TraversalPipeline{
+		db: ts.db,
+		steps: []Step{func(tx *Tx, _ Iterator) Iterator {
+			if len(ownedIDs) == 0 {
+				return tx.ScanNodes()
+			}
+			resolved := make([]uuid.UUID, 0, len(ownedIDs))
+			for _, externalID := range ownedIDs {
+				nodeID, exists, err := tx.ResolveExternalID(externalID)
+				if err != nil {
+					return &fixedNodeIterator{tx: tx, idx: -1, err: err}
+				}
+				if exists {
+					resolved = append(resolved, nodeID)
+				}
+			}
+			return newVerifiedFixedNodeIterator(tx, resolved)
+		}},
+	}, nil
+}
+
 // Step defines a processing step in the traversal pipeline.
 // It takes a transaction context and a previous iterator, and returns a new iterator.
 type Step func(tx *Tx, prev Iterator) Iterator

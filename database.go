@@ -3,6 +3,7 @@ package pathway
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -83,11 +84,12 @@ type Options struct {
 // Database represents a connection to the embedded graph database.
 // It is safe for concurrent use by multiple goroutines.
 type Database struct {
-	db       *pebble.DB
-	nextTxID atomic.Uint64
-	options  Options
-	indexes  map[string]map[string]struct{}
-	writeOpt pebble.WriteOptions
+	db         *pebble.DB
+	nextTxID   atomic.Uint64
+	options    Options
+	indexes    map[string]map[string]struct{}
+	writeOpt   pebble.WriteOptions
+	identityMu sync.Mutex
 }
 
 // Open creates or opens a graph database at the given path with default options.
@@ -177,6 +179,7 @@ func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error {
 		readOnly: false,
 		id:       d.nextTxID.Add(1),
 	}
+	defer tx.unlockExternalIDs()
 
 	if err := fn(tx); err != nil {
 		return err // Rollback is implicit as batch is not applied

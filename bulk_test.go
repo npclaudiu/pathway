@@ -154,3 +154,60 @@ func TestBulkUpdateRollsBackIgnoredWriterError(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestBulkUpdateImportsExternalNodesIdempotently(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	commitA, err := NewExternalID("git-object/sha1", make([]byte, 20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitB, err := NewExternalID("git-object/sha256", make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var firstA uuid.UUID
+	for run := 0; run < 2; run++ {
+		if err := db.BulkUpdate(context.Background(), func(writer *BulkWriter) error {
+			a, err := writer.PutNodeByExternalID(commitA, "Commit")
+			if err != nil {
+				return err
+			}
+			b, err := writer.PutNodeByExternalID(commitB, "Commit")
+			if err != nil {
+				return err
+			}
+			if firstA == uuid.Nil {
+				firstA = a
+			} else if a != firstA {
+				t.Fatalf("replayed bulk import changed UUID from %s to %s", firstA, a)
+			}
+			_, err = writer.PutEdge(a, b, "PARENT")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := db.View(context.Background(), func(tx *Tx) error {
+		iter := tx.ScanNodes()
+		defer closeTestResource(t, iter)
+		count := 0
+		for iter.Next() {
+			count++
+		}
+		if err := iter.Error(); err != nil {
+			return err
+		}
+		if count != 2 {
+			t.Fatalf("bulk reimport created %d nodes, want 2", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -46,7 +46,7 @@ func TestOpenWritesAndAcceptsCurrentSchema(t *testing.T) {
 }
 
 func TestOpenRejectsUnsupportedSchemaVersions(t *testing.T) {
-	for _, version := range []uint32{2, 3, currentSchemaVersion + 1} {
+	for _, version := range []uint32{2, 3, currentSchemaVersion - 1, currentSchemaVersion + 1} {
 		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
 			dir := t.TempDir()
 			rawDB, err := pebble.Open(dir, &pebble.Options{})

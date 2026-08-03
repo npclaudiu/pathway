@@ -15,7 +15,7 @@ go get github.com/npclaudiu/pathway
 
 ### Development storage compatibility
 
-Pathway currently uses schema version 4 and has not made a persistent-format
+Pathway currently uses schema version 5 and has not made a persistent-format
 compatibility promise. Unversioned stores and stores using earlier development
 schemas are rejected with `ErrUnsupportedSchema`; recreate them with the
 current release. Establish migrations and compatibility fixtures before using
@@ -77,6 +77,8 @@ func main() {
 ### Data Model
 
 * **Nodes**: Atomic entities identified by **16-byte UUIDs**.
+  Existing domain identities can be bound through immutable, namespaced
+  `ExternalID` values while adjacency records keep compact internal UUIDs.
 * **Edges**: Directed, labeled connections with UUIDs and optional properties.
   Pathway is a multigraph, so parallel edges are preserved as distinct records.
 * **Properties**: Typed key-value maps attached to existing nodes or edges,
@@ -204,6 +206,53 @@ Each typed collection terminal has a context variant, such as
 `ToNodesContext(ctx)`, for cancelling planning, reads, scans, repeats, and
 collection. `Each` and `ToList` remain the dynamic terminals for `Values` and
 custom pipelines.
+
+### External Identities
+
+Imports can preserve stable source identifiers without deriving UUIDs. An
+external identity has an exact, case-sensitive UTF-8 namespace, an optional
+opaque scope, and opaque value bytes. Pathway owns all component bytes and does
+not normalize them. Keep the identifier algorithm in the namespace and store
+digests as raw bytes:
+
+```go
+digest, err := hex.DecodeString(commitChecksum)
+if err != nil {
+	return err
+}
+commitID, err := pathway.NewScopedExternalID(
+	"git-object/sha1",
+	[]byte(canonicalRepositoryURL),
+	digest,
+)
+if err != nil {
+	return err
+}
+err = db.Update(ctx, func(tx *pathway.Tx) error {
+	_, err := tx.PutNodeByExternalID(commitID, "Commit")
+	return err
+})
+```
+
+`BindExternalID` attaches additional identities to an existing node;
+`ResolveExternalID` performs the reverse lookup. Reimporting the same identity
+is idempotent, while a binding to another node returns
+`ErrExternalIDConflict`. `VExternal` resolves identities and starts a normal
+UUID-backed traversal:
+
+```go
+query, err := pathway.NewTraversalSource(db).VExternal(commitID)
+if err != nil {
+	return err
+}
+commits, err := query.ToNodes()
+```
+
+Use different namespaces for SHA-1 and SHA-256. Repository-local identities
+belong in `Scope`; length-delimited storage keeps scope/value boundaries
+unambiguous. Resolving an external start adds forward, reverse-consistency, and
+node-existence reads before traversal; adjacency keys and traversal hops remain
+UUID-based.
 
 ## Documentation
 

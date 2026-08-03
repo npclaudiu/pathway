@@ -20,6 +20,8 @@ is designed around these choices:
   compaction, and crash recovery.
 - Nodes and edges use UUIDs. Edges are directed, labeled, and first-class
   entities that may own properties.
+- Namespaced external identities resolve to UUID-backed nodes through atomic
+  forward and reverse records; graph topology never embeds external IDs.
 - The graph is a multigraph. Parallel edges with identical endpoints and labels
   remain distinct because every edge has its own UUID.
 - Graph mutations update all denormalized records in one Pebble batch.
@@ -217,6 +219,37 @@ paths:
 - Index reconciliation clears and rebuilds each newly configured range from
   canonical node properties, or deletes the range for a removed definition.
 
+### External identity ownership
+
+`ExternalID` owns a namespace, optional scope, and value. Namespace strings are
+exact, case-sensitive UTF-8; scope and value are exact opaque bytes. The public
+constructors copy byte slices, accessors return copies, and the zero value is
+invalid. No component is normalized. Length-delimited component encoding makes
+`namespace/scope/value` boundaries unambiguous without escaping or string
+concatenation.
+
+External identity storage is bidirectional:
+
+```text
+external identity -> node UUID
+node UUID + external identity -> empty cleanup record
+```
+
+`BindExternalID`, `UnbindExternalID`, `PutNodeByExternalID`, and `DeleteNode`
+stage both directions in the same indexed batch. A transaction that first uses
+an external-identity mutation holds `Database.identityMu` through commit or
+rollback. This serializes conflicting identity imports without serializing
+transactions that never mutate identities. Repeating the same bind or upsert is
+idempotent; another node owner produces `ErrExternalIDConflict`.
+
+Resolution verifies the forward value length, matching reverse record, and
+target-node existence. Deletion scans the node-owned reverse range and verifies
+each forward record before deleting either direction. Encountered malformed,
+dangling, or inconsistent records return `ErrExternalIDCorrupt`, leaving the
+batch uncommitted. Forward records that have lost their reverse record cannot
+be found from a node-only scan, so routine integrity tooling remains a future
+extension.
+
 ### Schema versioning
 
 `OpenWithOptions` opens Pebble, calls `ensureSchema`, reconciles persisted index
@@ -229,7 +262,8 @@ definitions with `Options.Indexes`, and only then returns a `Database`.
   returns `ErrUnsupportedSchema` with guidance to recreate the pre-release
   store.
 
-Schema v4 directly replaced the development property and property-index value
+Schema v5 directly extends the development format with external identity
+records. Schema v4 had already replaced the property and property-index value
 formats. No compatibility clients exist, so older development stores are not
 migrated. This policy must be replaced by migrations and fixtures before the
 first persistent-format compatibility promise.
@@ -507,6 +541,13 @@ returns `ErrInvalidNodeID` without a partial traversal when any value is
 malformed. Valid but missing nodes are skipped. Explicit-ID order is preserved;
 scan order is UUID byte order.
 
+`VExternal` copies and validates caller identities, resolves them in argument
+order, skips unbound identities, and then uses verified internal UUIDs for the
+rest of the pipeline. With no arguments it scans all nodes, matching `V`.
+Identity resolution adds forward, reverse-consistency, and node-existence point
+reads; normal UUID starts require only the existence read. Label materialization
+and all subsequent adjacency work remain UUID-based.
+
 `Out` and `In` use this composition:
 
 ```text
@@ -697,6 +738,7 @@ The principal costs and write amplification are architectural, not incidental:
 | Delete edge | reverse point read, four deletes |
 | Delete node | property/index work, two adjacency scans, incident-edge UUID set, four deletes per edge |
 | Exact indexed lookup | snapshot creation plus bounded index scan |
+| External-ID resolution | forward, reverse-consistency, and node-existence point reads |
 | One-hop traversal with `IDs` | starting-node existence probe plus adjacency scan; no neighbor-label reads |
 | Label-bearing one-hop traversal | adjacency scan plus one lazy node point read per edge |
 | Label-filtered adjacency | one exact bounded scan per unique requested label |

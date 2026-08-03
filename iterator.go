@@ -457,6 +457,7 @@ func (it *nodeIndexIterator) Path() Path {
 type fixedNodeIterator struct {
 	tx          *Tx
 	ids         []uuid.UUID
+	verified    bool
 	idx         int
 	curID       uuid.UUID
 	curLbl      string
@@ -468,19 +469,28 @@ func newFixedNodeIterator(tx *Tx, ids []uuid.UUID) *fixedNodeIterator {
 	return &fixedNodeIterator{tx: tx, ids: ids, idx: -1}
 }
 
+func newVerifiedFixedNodeIterator(tx *Tx, ids []uuid.UUID) *fixedNodeIterator {
+	return &fixedNodeIterator{tx: tx, ids: ids, idx: -1, verified: true}
+}
+
 func (it *fixedNodeIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
 	for {
 		it.idx++
 		if it.idx >= len(it.ids) {
 			return false
 		}
-		exists, err := it.tx.nodeExists(it.ids[it.idx])
-		if err != nil {
-			it.err = err
-			return false
-		}
-		if !exists {
-			continue
+		if !it.verified {
+			exists, err := it.tx.nodeExists(it.ids[it.idx])
+			if err != nil {
+				it.err = err
+				return false
+			}
+			if !exists {
+				continue
+			}
 		}
 		it.curID = it.ids[it.idx]
 		it.curLbl = ""

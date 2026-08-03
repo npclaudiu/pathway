@@ -15,7 +15,7 @@ go test ./benchmarks -run '^$' -bench . -benchmem -count 5
 Run focused suites:
 
 ```bash
-go test ./benchmarks -run '^$' -bench 'Benchmark(GetNode|ScanNodes|FindNodes)$' -benchmem -count 5
+go test ./benchmarks -run '^$' -bench 'Benchmark(GetNode|ResolveExternalID|ScanNodes|FindNodes)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|TraverseOutHighDegree|TraverseOutByLabelHighDegree|BFS_2Hop)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge|BulkInsertEdge_100|InsertEdgeLargeEndpointLabels)$' -benchmem -count 5
 go test ./internal/properties -run '^$' -bench 'Benchmark(Marshal|Unmarshal)Properties$' -benchmem -count 5
@@ -31,6 +31,12 @@ measures an exact unique hit, a miss, an adversarial shared-prefix miss, and a
 lower-selectivity numeric hit. Traversal setup creates deterministic adjacency
 layers and validates the expected one-hop and two-hop cardinalities before
 starting the timer.
+
+`BenchmarkResolveExternalID` measures a snapshot-scoped identity resolution.
+It validates the forward mapping, reverse cleanup record, and target-node
+existence, so it performs three point reads. Compare it with `BenchmarkGetNode`,
+which performs one node-record read. `VExternal` pays the same resolution cost
+before normal UUID-backed traversal; later adjacency hops are unchanged.
 
 `BenchmarkTraverseOut` and `BenchmarkBFS_2Hop` also track terminal
 materialization. Replacing per-result maps with typed values reduced the

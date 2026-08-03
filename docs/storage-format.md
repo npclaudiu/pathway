@@ -1,21 +1,21 @@
 # Pathway Storage Format
 
 Pathway stores graph records in Pebble using byte-ordered key prefixes. This
-document describes Pathway schema version 4. Pathway has not yet made a stable
+document describes Pathway schema version 5. Pathway has not yet made a stable
 format compatibility promise; this document records the current development
 format and is not a replacement for the public Go API.
 
 All integer length fields are unsigned big-endian values. UUID fields contain
 the UUID's 16 raw bytes. Labels and property names used in node indexes have a
 maximum encoded length of 65,535 bytes. Labels are intended to be UTF-8, but
-schema v4 does not validate their encoding.
+schema v5 does not validate their encoding.
 
 ## Schema marker and compatibility
 
 The key `0x00 || "pathway/schema-version"` stores a four-byte, big-endian
-Pathway schema version. The current value is `4`.
+Pathway schema version. The current value is `5`.
 
-Schema v4 replaces the development property and index value formats directly.
+Schema v5 adds namespaced external-identity forward and reverse records.
 Unversioned stores and stores marked with earlier or later schema versions are
 rejected with `ErrUnsupportedSchema` and must be recreated. An empty database
 receives the version marker with a synced write before index definitions are
@@ -32,11 +32,49 @@ reconciled.
 | `0x05` | Node property index | See below | Empty |
 | `0x06` | Edge-ID reverse index | `edge-ID` | `source-ID \| target-ID \| label-length:u16 \| label` |
 | `0x07` | Property-index definition | `label-length:u16 \| label \| property-length:u16 \| property` | Empty |
+| `0x08` | External-ID forward lookup | See below | `node-ID` |
+| `0x09` | External IDs by node | `node-ID \|` external-ID components | Empty |
 
 The edge ID is part of both adjacency keys, giving Pathway multigraph
 semantics: edges with identical endpoints and labels remain distinct. The
 reverse record lets `DeleteEdge` find and remove both adjacency records and the
 edge's properties with bounded point operations.
+
+## External identities
+
+External IDs retain source-system identity while nodes and adjacency records
+continue to use internal UUIDs. A forward key is:
+
+```text
+0x08 |
+namespace-length:u16 | namespace |
+scope-length:u16     | scope     |
+value-length:u16     | value
+```
+
+The namespace is non-empty, exact, case-sensitive UTF-8. Scope is optional;
+value is non-empty. Each component is limited to 65,535 encoded bytes. Scope
+and value are opaque and compared byte-for-byte. Pathway performs no trimming,
+Unicode normalization, case folding, digest parsing, or hashing. Callers must
+therefore define one canonical form per namespace. Git importers should use
+separate namespaces such as `git-object/sha1` and `git-object/sha256`, store the
+raw digest as value, and use the optional scope for a canonical repository
+identity when object identity is repository-local.
+
+The reverse cleanup key repeats the length-delimited external identity after
+the owning node UUID:
+
+```text
+0x09 | node-ID | namespace-length:u16 | namespace |
+       scope-length:u16 | scope | value-length:u16 | value
+```
+
+Bind, unbind, upsert, and node deletion update forward and reverse records in
+the same indexed batch. A repeated identical binding is idempotent; a forward
+record already owned by another node is a uniqueness conflict. Node deletion
+scans `0x09 | node-ID`, verifies every corresponding forward record, and
+deletes both directions. Malformed, dangling, or inconsistent records abort the
+transaction with `ErrExternalIDCorrupt`.
 
 Adjacency keys are ordered by anchor UUID, encoded label, other endpoint UUID,
 then edge UUID. Because the encoded label begins with its `u16` byte length,

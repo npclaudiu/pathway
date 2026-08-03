@@ -50,6 +50,34 @@ func (w *BulkWriter) PutNode(id uuid.UUID, label string) error {
 	return nil
 }
 
+// PutNodeByExternalID resolves or creates an externally identified node and
+// makes its internal UUID immediately available to later bulk operations.
+// Replaying the same external ID returns the same UUID.
+func (w *BulkWriter) PutNodeByExternalID(externalID ExternalID, label string) (uuid.UUID, error) {
+	if err := w.ready(); err != nil {
+		return uuid.Nil, err
+	}
+	nodeID, err := w.tx.PutNodeByExternalID(externalID, label)
+	if err != nil {
+		return uuid.Nil, w.fail(err)
+	}
+	w.nodeExistence[nodeID] = true
+	return nodeID, nil
+}
+
+// BindExternalID binds an external identity to a node in the current bulk
+// transaction. Repeating the same binding is idempotent.
+func (w *BulkWriter) BindExternalID(externalID ExternalID, nodeID uuid.UUID) error {
+	if err := w.ready(); err != nil {
+		return err
+	}
+	if err := w.tx.BindExternalID(externalID, nodeID); err != nil {
+		return w.fail(err)
+	}
+	w.nodeExistence[nodeID] = true
+	return nil
+}
+
 // PutEdge stages a directed edge after validating its endpoints. Each distinct
 // endpoint is read at most once during the bulk callback; nodes inserted through
 // this writer require no additional endpoint read.
