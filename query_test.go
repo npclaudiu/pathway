@@ -45,11 +45,10 @@ func (it *closeTrackingNodeIterator) Close() error {
 	return it.NodeIterator.Close()
 }
 
-func TestQuery_V_InvalidUUID(t *testing.T) {
+func TestQuery_VUsesTypedCallerOwnedIDs(t *testing.T) {
 	db, _ := Open(":memory:")
 	defer closeTestResource(t, db)
 
-	// Create one valid node
 	id := uuid.New()
 	if err := db.Update(context.Background(), func(tx *Tx) error {
 		return tx.PutNode(id, "Thing")
@@ -58,15 +57,51 @@ func TestQuery_V_InvalidUUID(t *testing.T) {
 	}
 
 	g := NewTraversalSource(db)
-
-	// Query with one valid and one invalid
-	results, err := g.V(id.String(), "not-a-uuid").ToList()
+	ids := []uuid.UUID{id}
+	pipeline := g.V(ids...)
+	ids[0] = uuid.New()
+	results, err := pipeline.ToList()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].(Node).ID != id {
+		t.Fatalf("typed V results = %#v, want node %s", results, id)
+	}
+}
+
+func TestQuery_VStringsParsesValidIDsAndRejectsMalformedIDs(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	id := uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		return tx.PutNode(id, "Thing")
+	}); err != nil {
+		t.Fatal(err)
 	}
 
-	if len(results) != 1 {
-		t.Errorf("expected 1 result (valid uuid), got %d", len(results))
+	g := NewTraversalSource(db)
+	pipeline, err := g.VStrings(id.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := pipeline.ToList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].(Node).ID != id {
+		t.Fatalf("VStrings results = %#v, want node %s", results, id)
+	}
+
+	pipeline, err = g.VStrings(id.String(), "not-a-uuid")
+	if pipeline != nil {
+		t.Fatal("VStrings returned a partial pipeline for malformed input")
+	}
+	if !errors.Is(err, ErrInvalidNodeID) {
+		t.Fatalf("VStrings error = %v, want ErrInvalidNodeID", err)
 	}
 }
 
@@ -331,7 +366,7 @@ func TestQuery_ToListContextCancelsRepeat(t *testing.T) {
 	started := make(chan struct{})
 	proceed := make(chan struct{})
 	var once sync.Once
-	pipeline := NewTraversalSource(db).V(id.String()).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
+	pipeline := NewTraversalSource(db).V(id).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
 		return p.Out("LOOP")
 	}).Until(func(interface{}) bool {
 		once.Do(func() {
@@ -387,7 +422,7 @@ func TestQuery_Path_Check(t *testing.T) {
 	}
 
 	g := NewTraversalSource(db)
-	res, err := g.V(u1.String()).Out("LINK").Path().ToList()
+	res, err := g.V(u1).Out("LINK").Path().ToList()
 	if err != nil {
 		t.Fatalf("Path query failed: %v", err)
 	}
@@ -409,7 +444,7 @@ func TestQuery_Path_Check(t *testing.T) {
 
 	// Materialized paths do not share mutable backing storage with later reads.
 	path[0].Label = "mutated"
-	again, err := g.V(u1.String()).Out("LINK").Path().ToList()
+	again, err := g.V(u1).Out("LINK").Path().ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +514,7 @@ func TestQuery_ToListReturnsOwnedTypedElements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nodes, err := NewTraversalSource(db).V(source.String()).Out("LINK").ToList()
+	nodes, err := NewTraversalSource(db).V(source).Out("LINK").ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +568,7 @@ func TestQuery_In(t *testing.T) {
 	g := NewTraversalSource(db)
 
 	// u2 <- In("LINK") == u1
-	res, err := g.V(u2.String()).In("LINK").ToList()
+	res, err := g.V(u2).In("LINK").ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +610,7 @@ func TestQuery_Repeat(t *testing.T) {
 	g := NewTraversalSource(db)
 
 	// Repeat(Out).Times(2)
-	res, err := g.V(a.String()).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
+	res, err := g.V(a).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
 		return p.Out("NEXT")
 	}).Times(2).ToList()
 
@@ -608,7 +643,7 @@ func TestQuery_Values(t *testing.T) {
 	}
 
 	g := NewTraversalSource(db)
-	res, err := g.V(id.String()).Values("name").ToList()
+	res, err := g.V(id).Values("name").ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +651,7 @@ func TestQuery_Values(t *testing.T) {
 		t.Fatalf("single-key projection = %#v, want [Alice]", res)
 	}
 
-	res, err = g.V(id.String()).Values("name", "missing", "age", "active").ToList()
+	res, err = g.V(id).Values("name", "missing", "age", "active").ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +660,7 @@ func TestQuery_Values(t *testing.T) {
 		t.Fatalf("multi-key mixed projection = %#v, want %#v", res, want)
 	}
 
-	res, err = g.V(id.String()).Values("missing").ToList()
+	res, err = g.V(id).Values("missing").ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +695,7 @@ func TestQuery_IDsAvoidLabelMaterializationAcrossHops(t *testing.T) {
 	}
 
 	g := NewTraversalSource(db)
-	oneHop, err := g.V(a.String()).Out("NEXT").IDs().ToList()
+	oneHop, err := g.V(a).Out("NEXT").IDs().ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +703,7 @@ func TestQuery_IDsAvoidLabelMaterializationAcrossHops(t *testing.T) {
 		t.Fatalf("one-hop IDs = %#v, want %#v", oneHop, want)
 	}
 
-	twoHops, err := g.V(a.String()).Out("NEXT").Out("NEXT").IDs().ToList()
+	twoHops, err := g.V(a).Out("NEXT").Out("NEXT").IDs().ToList()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,7 +711,7 @@ func TestQuery_IDsAvoidLabelMaterializationAcrossHops(t *testing.T) {
 		t.Fatalf("two-hop IDs = %#v, want %#v", twoHops, want)
 	}
 
-	values, err := g.V(a.String()).Out("NEXT").Values("name").ToList()
+	values, err := g.V(a).Out("NEXT").Values("name").ToList()
 	if err != nil {
 		t.Fatal(err)
 	}

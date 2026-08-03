@@ -157,7 +157,7 @@ func findFriends(db *pathway.Database, aliceID uuid.UUID) {
     g := pathway.NewTraversalSource(db)
     
     // Query: Start at Alice -> Outgoing "FOLLOWS" edges -> Neighbor Nodes
-    results, err := g.V(aliceID.String()).Out("FOLLOWS").ToList()
+    results, err := g.V(aliceID).Out("FOLLOWS").ToList()
     if err != nil {
         log.Fatal(err)
     }
@@ -174,6 +174,20 @@ Passing one or more edge labels to `Out` or `In` restricts Pebble to the exact
 adjacency range for each unique label. Multiple labels are returned in
 deterministic adjacency-key order, not caller argument order. Omitting labels
 scans every incident edge for that direction.
+
+`V` takes typed `uuid.UUID` values. If an import or request provides textual
+UUIDs, parse them explicitly with `VStrings`:
+
+```go
+query, err := g.VStrings(aliceIDText)
+if err != nil {
+    log.Fatal(err) // errors.Is(err, pathway.ErrInvalidNodeID)
+}
+results, err := query.Out("FOLLOWS").ToList()
+```
+
+`VStrings` rejects the entire request when any ID is malformed; it never drops
+bad values and continues with a partial traversal.
 
 For a result set that should not be collected in memory, stream it with `Each`:
 
@@ -200,7 +214,7 @@ caller context to query hooks and storage reads.
 Find people Alice follows, and then who *they* follow.
 
 ```go
-results, err := g.V(aliceID.String()).
+results, err := g.V(aliceID).
     Out("FOLLOWS"). // 1st Hop (Friends)
     Out("FOLLOWS"). // 2nd Hop (Friends of Friends)
     ToList()
@@ -215,7 +229,7 @@ Traverse backwards using `In()`.
 
 ```go
 // Start at Post -> Incoming "LIKED" edge -> User
-results, err := g.V(postID.String()).
+results, err := g.V(postID).
     In("LIKED").
     ToList()
 if err != nil {
@@ -229,7 +243,7 @@ Complex traversal combining multiple edge types.
 
 ```go
 // Alice -> (Follows) -> Friends -> (Posted) -> Posts
-results, err := g.V(aliceID.String()).
+results, err := g.V(aliceID).
     Out("FOLLOWS").
     Out("POSTED").
     ToList()
@@ -245,7 +259,7 @@ so this avoids one node-label point read per traversed edge and is especially
 useful for high-degree nodes and multi-hop traversals.
 
 ```go
-friendIDs, err := g.V(aliceID.String()).
+friendIDs, err := g.V(aliceID).
     Out("FOLLOWS").
     IDs().
     ToList()
@@ -263,7 +277,7 @@ Each result is a `uuid.UUID`. Use ordinary `ToList` when labels are needed;
 requested key order is preserved and missing properties are skipped.
 
 ```go
-names, err := g.V(aliceID.String()).
+names, err := g.V(aliceID).
     Out("FOLLOWS").
     Values("username").
     ToList()
@@ -278,7 +292,7 @@ if err != nil {
 edge entries also set `Other` to the endpoint reached by that step.
 
 ```go
-paths, err := g.V(aliceID.String()).Out("FOLLOWS").Path().ToList()
+paths, err := g.V(aliceID).Out("FOLLOWS").Path().ToList()
 if err != nil {
     log.Fatal(err)
 }

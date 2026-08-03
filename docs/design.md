@@ -499,10 +499,12 @@ returns a replacement iterator. Builder methods append steps and return the
 same pipeline pointer; pipelines are not immutable values and should not be
 modified concurrently.
 
-With no IDs, `V` starts `ScanNodes`. With textual IDs, it parses UUIDs and uses
-`fixedNodeIterator`. Malformed UUID strings are silently dropped, and valid but
-missing nodes are skipped. Explicit-ID order is preserved; scan order is UUID
-byte order.
+With no IDs, `V` starts `ScanNodes`. With typed UUIDs, it copies the caller's ID
+slice and uses `fixedNodeIterator` without parsing. `VStrings` is the explicit
+textual entry point: it parses every UUID before constructing a pipeline and
+returns `ErrInvalidNodeID` without a partial traversal when any value is
+malformed. Valid but missing nodes are skipped. Explicit-ID order is preserved;
+scan order is UUID byte order.
 
 `Out` and `In` use this composition:
 

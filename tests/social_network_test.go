@@ -165,7 +165,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 	t.Run("FindFriends", func(t *testing.T) {
 		g := pathway.NewTraversalSource(db)
 		results, err := g.
-			V(users["Alice"].String()).
+			V(users["Alice"]).
 			Out("FOLLOWS").
 			ToList()
 
@@ -194,7 +194,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 	t.Run("FindFriendsOfFriends", func(t *testing.T) {
 		g := pathway.NewTraversalSource(db)
 		results, err := g.
-			V(users["Alice"].String()).
+			V(users["Alice"]).
 			Out("FOLLOWS"). // Friends
 			Out("FOLLOWS"). // FOAF
 			ToList()
@@ -227,7 +227,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 	t.Run("FindPostsByFriends", func(t *testing.T) {
 		g := pathway.NewTraversalSource(db)
 		results, err := g.
-			V(users["Alice"].String()).
+			V(users["Alice"]).
 			Out("FOLLOWS").
 			Out("POSTED").
 			ToList()
@@ -247,7 +247,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 	t.Run("WhoLikedAlicePost", func(t *testing.T) {
 		g := pathway.NewTraversalSource(db)
 		results, err := g.
-			V(posts["AliceIntro"].String()).
+			V(posts["AliceIntro"]).
 			In("LIKED").
 			ToList()
 

@@ -61,12 +61,12 @@ func run() error {
 	g := pathway.NewTraversalSource(db)
 	// Each requested edge label is an exact adjacency range. Multi-label results
 	// retain deterministic storage-key order rather than argument order.
-	ids, err := g.V(alice.String()).Out("MENTORS", "FOLLOWS").IDs().ToList()
+	ids, err := g.V(alice).Out("MENTORS", "FOLLOWS").IDs().ToList()
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Alice follows IDs: %v\n", ids)
-	nodes, err := g.V(alice.String()).Out("FOLLOWS").ToList()
+	nodes, err := g.V(alice).Out("FOLLOWS").ToList()
 	if err != nil {
 		return err
 	}
@@ -75,13 +75,13 @@ func run() error {
 		fmt.Printf("Alice follows node: %s (%s)\n", node.ID, node.Label)
 	}
 
-	names, err := g.V(alice.String()).Out("FOLLOWS").Values("name").ToList()
+	names, err := g.V(alice).Out("FOLLOWS").Values("name").ToList()
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Alice follows: %v\n", names)
 
-	results, err := g.V(alice.String()).Out("FOLLOWS").Path().ToList()
+	results, err := g.V(alice).Out("FOLLOWS").Path().ToList()
 	if err != nil {
 		return err
 	}

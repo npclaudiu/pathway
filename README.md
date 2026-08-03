@@ -61,7 +61,7 @@ func main() {
 	}
 
 	names, err := pathway.NewTraversalSource(db).
-		V(alice.String()).
+		V(alice).
 		Out("FOLLOWS").
 		Values("name").
 		ToList()
@@ -170,6 +170,18 @@ values, so callers do not need map keys or value assertions for element fields.
 Labels passed to `Out` or `In` use exact Pebble ranges instead of scanning
 unrelated adjacency entries; multi-label results have deterministic storage-key
 order regardless of argument order.
+
+`V` accepts `uuid.UUID` values directly and does not parse them. When IDs arrive
+as text, use `VStrings`; it returns `ErrInvalidNodeID` for any malformed value
+instead of silently constructing a partial traversal:
+
+```go
+query, err := g.VStrings(textID)
+if err != nil {
+	return err
+}
+results, err := query.Out("FOLLOWS").ToList()
+```
 
 Large traversals can be consumed with bounded memory by using `Each`:
 

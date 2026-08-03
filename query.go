@@ -3,6 +3,7 @@ package pathway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,29 +71,38 @@ func NewTraversalSource(db *Database) *TraversalSource {
 // Usage:
 //
 //	// Start at specific node
-//	g.V("uuid-string").Out()...
+//	g.V(id).Out()...
 //
 //	// Start at all nodes (scan)
 //	g.V().HasLabel("Person")...
-func (ts *TraversalSource) V(ids ...string) *TraversalPipeline {
+func (ts *TraversalSource) V(ids ...uuid.UUID) *TraversalPipeline {
+	ownedIDs := append([]uuid.UUID(nil), ids...)
 	return &TraversalPipeline{
 		db: ts.db,
 		steps: []Step{
 			func(tx *Tx, _ Iterator) Iterator {
-				if len(ids) == 0 {
+				if len(ownedIDs) == 0 {
 					return tx.ScanNodes()
-				} else {
-					uids := make([]uuid.UUID, 0, len(ids))
-					for _, s := range ids {
-						if id, err := uuid.Parse(s); err == nil {
-							uids = append(uids, id)
-						}
-					}
-					return newFixedNodeIterator(tx, uids)
 				}
+				return newFixedNodeIterator(tx, ownedIDs)
 			},
 		},
 	}
+}
+
+// VStrings parses textual UUIDs and starts a traversal at those nodes. It
+// returns ErrInvalidNodeID if any value is malformed; no partial traversal is
+// constructed. Prefer V when UUIDs are already available.
+func (ts *TraversalSource) VStrings(ids ...string) (*TraversalPipeline, error) {
+	parsed := make([]uuid.UUID, len(ids))
+	for i, text := range ids {
+		id, err := uuid.Parse(text)
+		if err != nil {
+			return nil, fmt.Errorf("%w at position %d: %q", ErrInvalidNodeID, i, text)
+		}
+		parsed[i] = id
+	}
+	return ts.V(parsed...), nil
 }
 
 // Step defines a processing step in the traversal pipeline.

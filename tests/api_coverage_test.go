@@ -331,7 +331,7 @@ func TestAPICoverage(t *testing.T) {
 
 		// A. Traversal
 		g := pathway.NewTraversalSource(db)
-		results, err := g.V(a.String()).Out("LINK").ToList()
+		results, err := g.V(a).Out("LINK").ToList()
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
 		}
@@ -364,7 +364,7 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// Query: A.Out(LINK) should only return B
-		results, err = g.V(a.String()).Out("LINK").ToList()
+		results, err = g.V(a).Out("LINK").ToList()
 		if err != nil {
 			t.Errorf("Query failed: %v", err)
 		}
@@ -373,7 +373,7 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// Query: A.Out() should return B and C
-		results, err = g.V(a.String()).Out().ToList()
+		results, err = g.V(a).Out().ToList()
 		if err != nil {
 			t.Errorf("Query failed: %v", err)
 		}
