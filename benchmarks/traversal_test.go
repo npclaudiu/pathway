@@ -17,23 +17,19 @@ func BenchmarkTraverseOut(b *testing.B) {
 		ids := GenerateRandomGraph(b, db, nodeCount, edgeCount)
 		rng := rand.New(rand.NewSource(3))
 		wantDegree := edgeCount / nodeCount
-		validation, err := pathway.NewTraversalSource(db).V(ids[0]).Out().ToList()
+		validation, err := pathway.NewTraversalSource(db).V(ids[0]).Out().ToNodes()
 		if err != nil {
 			b.Fatalf("validate traversal workload: %v", err)
 		}
 		if len(validation) != wantDegree {
 			b.Fatalf("expected out-degree %d, got %d", wantDegree, len(validation))
 		}
-		if _, ok := validation[0].(pathway.Node); !ok {
-			b.Fatalf("one-hop result type = %T, want pathway.Node", validation[0])
-		}
-
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			startID := ids[rng.Intn(len(ids))]
-			// ToList owns the read transaction, so this measures the complete query
+			// ToNodes owns the read transaction, so this measures the complete query
 			// lifecycle rather than nesting another snapshot around it.
-			list, err := pathway.NewTraversalSource(db).V(startID).Out().ToList()
+			list, err := pathway.NewTraversalSource(db).V(startID).Out().ToNodes()
 			if err != nil {
 				b.Fatalf("traversal error: %v", err)
 			}
@@ -54,21 +50,17 @@ func BenchmarkBFS_2Hop(b *testing.B) {
 		ids := GenerateRandomGraph(b, db, nodeCount, edgeCount)
 		rng := rand.New(rand.NewSource(4))
 		wantPaths := (edgeCount / nodeCount) * (edgeCount / nodeCount)
-		validation, err := pathway.NewTraversalSource(db).V(ids[0]).Out().Out().ToList()
+		validation, err := pathway.NewTraversalSource(db).V(ids[0]).Out().Out().ToNodes()
 		if err != nil {
 			b.Fatalf("validate two-hop workload: %v", err)
 		}
 		if len(validation) != wantPaths {
 			b.Fatalf("expected %d two-hop paths, got %d", wantPaths, len(validation))
 		}
-		if _, ok := validation[0].(pathway.Node); !ok {
-			b.Fatalf("two-hop result type = %T, want pathway.Node", validation[0])
-		}
-
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			startID := ids[rng.Intn(len(ids))]
-			_, err := pathway.NewTraversalSource(db).V(startID).Out().Out().ToList()
+			_, err := pathway.NewTraversalSource(db).V(startID).Out().Out().ToNodes()
 			if err != nil {
 				b.Fatalf("2-hop traversal error: %v", err)
 			}
@@ -101,11 +93,11 @@ func BenchmarkTraverseOutHighDegree(b *testing.B) {
 		}
 
 		g := pathway.NewTraversalSource(db)
-		ids, err := g.V(source).Out("LINK").IDs().ToList()
+		ids, err := g.V(source).Out("LINK").IDs().ToIDs()
 		if err != nil || len(ids) != degree {
 			b.Fatalf("validate ID projection: len=%d, err=%v", len(ids), err)
 		}
-		nodes, err := g.V(source).Out("LINK").ToList()
+		nodes, err := g.V(source).Out("LINK").ToNodes()
 		if err != nil || len(nodes) != degree {
 			b.Fatalf("validate node projection: len=%d, err=%v", len(nodes), err)
 		}
@@ -113,7 +105,7 @@ func BenchmarkTraverseOutHighDegree(b *testing.B) {
 		b.Run("IDs", func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				results, err := g.V(source).Out("LINK").IDs().ToList()
+				results, err := g.V(source).Out("LINK").IDs().ToIDs()
 				if err != nil || len(results) != degree {
 					b.Fatalf("ID traversal: len=%d, err=%v", len(results), err)
 				}
@@ -123,7 +115,7 @@ func BenchmarkTraverseOutHighDegree(b *testing.B) {
 		b.Run("Labels", func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				results, err := g.V(source).Out("LINK").ToList()
+				results, err := g.V(source).Out("LINK").ToNodes()
 				if err != nil || len(results) != degree {
 					b.Fatalf("label traversal: len=%d, err=%v", len(results), err)
 				}
@@ -175,14 +167,14 @@ func BenchmarkTraverseOutByLabelHighDegree(b *testing.B) {
 			{name: "MultipleRare", labels: []string{"SECONDARY", "RARE"}, want: rareEdges + secondaryEdges},
 		}
 		for _, bench := range cases {
-			results, err := g.V(source).Out(bench.labels...).IDs().ToList()
+			results, err := g.V(source).Out(bench.labels...).IDs().ToIDs()
 			if err != nil || len(results) != bench.want {
 				b.Fatalf("validate %s: len=%d, want=%d, err=%v", bench.name, len(results), bench.want, err)
 			}
 			b.Run(bench.name, func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					results, err := g.V(source).Out(bench.labels...).IDs().ToList()
+					results, err := g.V(source).Out(bench.labels...).IDs().ToIDs()
 					if err != nil || len(results) != bench.want {
 						b.Fatalf("labeled traversal: len=%d, want=%d, err=%v", len(results), bench.want, err)
 					}

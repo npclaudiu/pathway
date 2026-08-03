@@ -1,6 +1,9 @@
 package pathway
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestPredicates(t *testing.T) {
 	// Eq
@@ -12,6 +15,12 @@ func TestPredicates(t *testing.T) {
 	}
 	if Eq("a")("b") {
 		t.Error("Eq(a)(b) should be false")
+	}
+	if !Eq(map[string]any{"items": []any{int64(1)}})(map[string]any{"items": []any{int64(1)}}) {
+		t.Error("Eq should deeply compare dynamic maps and lists")
+	}
+	if Eq(int64(5))(5) {
+		t.Error("Eq should remain type-sensitive")
 	}
 
 	// Gt
@@ -30,6 +39,21 @@ func TestPredicates(t *testing.T) {
 	}
 	if Gt(3.14)(3.14) {
 		t.Error("Gt float equal should be false")
+	}
+	if !Gt(5)(int64(6)) {
+		t.Error("Gt should compare canonical int64 properties with integer literals")
+	}
+	if !Gt(int64(-1))(uint64(0)) {
+		t.Error("Gt should compare signed and unsigned integers safely")
+	}
+	if Gt(0)(math.NaN()) {
+		t.Error("Gt should reject NaN")
+	}
+	if Gt(math.NaN())(math.Inf(1)) {
+		t.Error("Gt should reject a NaN bound")
+	}
+	if !Gt(0)(math.Inf(1)) || Gt(0)(math.Inf(-1)) {
+		t.Error("Gt should compare infinities")
 	}
 
 	// Type Mismatches
@@ -53,6 +77,9 @@ func TestPredicates(t *testing.T) {
 
 	if !Lt(3.14)(1.0) {
 		t.Error("Lt float should work")
+	}
+	if !Lt(uint64(6))(int64(5)) {
+		t.Error("Lt should compare signed and unsigned integers safely")
 	}
 	if Lt(5)("s") {
 		t.Error("Lt mixed types should be false")

@@ -147,8 +147,9 @@ the operations staged before it.
 ## 4. Querying
 
 Pathway provides a fluent traversal interface inspired by Gremlin. Normal node
-results are `pathway.Node` values; ID, property, and path projections return
-UUIDs, scalars, and typed paths, respectively.
+results are collected as `[]pathway.Node` with `ToNodes`; ID and path
+projections use `ToIDs` and `ToPaths`. Property projections remain dynamic and
+use `ToList` because one traversal can return mixed property types.
 
 ### 4.1 Find Friends of Alice
 
@@ -157,14 +158,13 @@ func findFriends(db *pathway.Database, aliceID uuid.UUID) {
     g := pathway.NewTraversalSource(db)
     
     // Query: Start at Alice -> Outgoing "FOLLOWS" edges -> Neighbor Nodes
-    results, err := g.V(aliceID).Out("FOLLOWS").ToList()
+    results, err := g.V(aliceID).Out("FOLLOWS").ToNodes()
     if err != nil {
         log.Fatal(err)
     }
 
     fmt.Printf("Alice follows %d people:\n", len(results))
-    for _, result := range results {
-        friend := result.(pathway.Node)
+    for _, friend := range results {
         fmt.Printf("- %v (Label: %s)\n", friend.ID, friend.Label)
     }
 }
@@ -183,17 +183,17 @@ query, err := g.VStrings(aliceIDText)
 if err != nil {
     log.Fatal(err) // errors.Is(err, pathway.ErrInvalidNodeID)
 }
-results, err := query.Out("FOLLOWS").ToList()
+results, err := query.Out("FOLLOWS").ToNodes()
 ```
 
 `VStrings` rejects the entire request when any ID is malformed; it never drops
 bad values and continues with a partial traversal.
 
-For a result set that should not be collected in memory, stream it with `Each`:
+For a result set that should not be collected in memory, stream it with the
+terminal matching its result shape:
 
 ```go
-err := g.V().HasLabel("Person").Each(ctx, func(result interface{}) error {
-    person := result.(pathway.Node)
+err := g.V().HasLabel("Person").EachNode(ctx, func(person pathway.Node) error {
     fmt.Printf("- %v\n", person.ID)
     return nil
 })
@@ -202,12 +202,12 @@ if err != nil {
 }
 ```
 
-The callback receives the same result types as `ToList`. Returning an error
-stops the traversal early, and cancelling `ctx` returns `context.Canceled`.
-Pathway closes the iterator stack and read transaction on every exit path.
-When collection is convenient but cancellation is required, replace `ToList()`
-with `ToListContext(ctx)`; it returns the same result shapes and propagates the
-caller context to query hooks and storage reads.
+Returning an error stops the traversal early, and cancelling `ctx` returns
+`context.Canceled`. Pathway closes the iterator stack and read transaction on
+every exit path. `EachNode`, `EachEdge`, `EachPath`, and `EachID` return
+`ErrTraversalResult` if the final pipeline step emits a different shape. When
+collection is convenient but cancellation is required, use the corresponding
+context terminal, such as `ToNodesContext(ctx)`.
 
 ### 4.2 Friends of Friends (2-Hop)
 
@@ -217,7 +217,7 @@ Find people Alice follows, and then who *they* follow.
 results, err := g.V(aliceID).
     Out("FOLLOWS"). // 1st Hop (Friends)
     Out("FOLLOWS"). // 2nd Hop (Friends of Friends)
-    ToList()
+    ToNodes()
 if err != nil {
     log.Fatal(err)
 }
@@ -231,7 +231,7 @@ Traverse backwards using `In()`.
 // Start at Post -> Incoming "LIKED" edge -> User
 results, err := g.V(postID).
     In("LIKED").
-    ToList()
+    ToNodes()
 if err != nil {
     log.Fatal(err)
 }
@@ -246,7 +246,7 @@ Complex traversal combining multiple edge types.
 results, err := g.V(aliceID).
     Out("FOLLOWS").
     Out("POSTED").
-    ToList()
+    ToNodes()
 if err != nil {
     log.Fatal(err)
 }
@@ -262,13 +262,13 @@ useful for high-degree nodes and multi-hop traversals.
 friendIDs, err := g.V(aliceID).
     Out("FOLLOWS").
     IDs().
-    ToList()
+    ToIDs()
 if err != nil {
     log.Fatal(err)
 }
 ```
 
-Each result is a `uuid.UUID`. Use ordinary `ToList` when labels are needed;
+Each result is a `uuid.UUID`. Use `ToNodes` when labels are needed;
 `HasLabel` and `Path` also materialize labels by design.
 
 ### 4.6 Project Property Values
@@ -292,12 +292,11 @@ if err != nil {
 edge entries also set `Other` to the endpoint reached by that step.
 
 ```go
-paths, err := g.V(aliceID).Out("FOLLOWS").Path().ToList()
+paths, err := g.V(aliceID).Out("FOLLOWS").Path().ToPaths()
 if err != nil {
     log.Fatal(err)
 }
-for _, result := range paths {
-    path := result.(pathway.Path)
+for _, path := range paths {
     for _, element := range path {
         fmt.Printf("%s %s %s\n", element.Kind, element.Label, element.ID)
     }

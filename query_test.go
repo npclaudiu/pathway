@@ -60,11 +60,11 @@ func TestQuery_VUsesTypedCallerOwnedIDs(t *testing.T) {
 	ids := []uuid.UUID{id}
 	pipeline := g.V(ids...)
 	ids[0] = uuid.New()
-	results, err := pipeline.ToList()
+	results, err := pipeline.ToNodes()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].(Node).ID != id {
+	if len(results) != 1 || results[0].ID != id {
 		t.Fatalf("typed V results = %#v, want node %s", results, id)
 	}
 }
@@ -88,11 +88,11 @@ func TestQuery_VStringsParsesValidIDsAndRejectsMalformedIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := pipeline.ToList()
+	results, err := pipeline.ToNodes()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].(Node).ID != id {
+	if len(results) != 1 || results[0].ID != id {
 		t.Fatalf("VStrings results = %#v, want node %s", results, id)
 	}
 
@@ -136,10 +136,7 @@ func TestQuery_EachStreamsResults(t *testing.T) {
 	}
 
 	count := 0
-	err = NewTraversalSource(db).V().Each(context.Background(), func(result interface{}) error {
-		if _, ok := result.(Node); !ok {
-			t.Fatalf("result type = %T, want pathway.Node", result)
-		}
+	err = NewTraversalSource(db).V().EachNode(context.Background(), func(Node) error {
 		count++
 		return nil
 	})
@@ -368,7 +365,7 @@ func TestQuery_ToListContextCancelsRepeat(t *testing.T) {
 	var once sync.Once
 	pipeline := NewTraversalSource(db).V(id).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
 		return p.Out("LOOP")
-	}).Until(func(interface{}) bool {
+	}).Until(func(Node) bool {
 		once.Do(func() {
 			close(started)
 			<-proceed
@@ -422,17 +419,14 @@ func TestQuery_Path_Check(t *testing.T) {
 	}
 
 	g := NewTraversalSource(db)
-	res, err := g.V(u1).Out("LINK").Path().ToList()
+	res, err := g.V(u1).Out("LINK").Path().ToPaths()
 	if err != nil {
 		t.Fatalf("Path query failed: %v", err)
 	}
 	if len(res) != 1 {
 		t.Fatalf("expected one path, got %d", len(res))
 	}
-	path, ok := res[0].(Path)
-	if !ok {
-		t.Fatalf("path result has type %T, want pathway.Path", res[0])
-	}
+	path := res[0]
 	want := Path{
 		{Kind: PathNode, ID: u1, Label: "A"},
 		{Kind: PathEdge, ID: edgeID, Label: "LINK", Other: u2},
@@ -444,11 +438,11 @@ func TestQuery_Path_Check(t *testing.T) {
 
 	// Materialized paths do not share mutable backing storage with later reads.
 	path[0].Label = "mutated"
-	again, err := g.V(u1).Out("LINK").Path().ToList()
+	again, err := g.V(u1).Out("LINK").Path().ToPaths()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again[0].(Path)[0].Label != "A" {
+	if again[0][0].Label != "A" {
 		t.Fatal("path result was mutated through shared backing storage")
 	}
 }
@@ -475,23 +469,20 @@ func TestQuery_HasLabel(t *testing.T) {
 	g := NewTraversalSource(db)
 
 	// HasLabel("Robot")
-	res, err := g.V().HasLabel("Robot").ToList()
+	res, err := g.V().HasLabel("Robot").ToNodes()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(res) != 1 {
 		t.Errorf("expected 1 robot, got %d", len(res))
 	}
-	node, ok := res[0].(Node)
-	if !ok {
-		t.Fatalf("result type = %T, want pathway.Node", res[0])
-	}
+	node := res[0]
 	if node.ID != u2 || node.Label != "Robot" {
 		t.Errorf("result = %#v, want Robot node %s", node, u2)
 	}
 }
 
-func TestQuery_ToListReturnsOwnedTypedElements(t *testing.T) {
+func TestQuery_TypedTerminalsReturnOwnedElements(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +505,7 @@ func TestQuery_ToListReturnsOwnedTypedElements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nodes, err := NewTraversalSource(db).V(source).Out("LINK").ToList()
+	nodes, err := NewTraversalSource(db).V(source).Out("LINK").ToNodes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +518,7 @@ func TestQuery_ToListReturnsOwnedTypedElements(t *testing.T) {
 		steps: []Step{func(tx *Tx, _ Iterator) Iterator {
 			return tx.OutEdges(source, "LINK")
 		}},
-	}).ToList()
+	}).ToEdges()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,8 +529,39 @@ func TestQuery_ToListReturnsOwnedTypedElements(t *testing.T) {
 	if err := db.Update(ctx, func(tx *Tx) error { return tx.PutNode(target, "Renamed") }); err != nil {
 		t.Fatal(err)
 	}
-	if got := nodes[0].(Node).Label; got != "Target" {
+	if got := nodes[0].Label; got != "Target" {
 		t.Fatalf("materialized label changed after relabel: %q", got)
+	}
+}
+
+func TestQuery_TypedTerminalRejectsWrongResultShape(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	id := uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		return tx.PutNode(id, "Node")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	g := NewTraversalSource(db)
+	results, err := g.V(id).IDs().ToNodes()
+	if results != nil {
+		t.Fatalf("mismatched results = %#v, want nil", results)
+	}
+	if !errors.Is(err, ErrTraversalResult) {
+		t.Fatalf("mismatched result error = %v, want ErrTraversalResult", err)
+	}
+	emptyResults, err := g.V(uuid.New()).IDs().ToNodes()
+	if emptyResults != nil || !errors.Is(err, ErrTraversalResult) {
+		t.Fatalf("empty mismatched traversal = %#v, %v; want nil, ErrTraversalResult", emptyResults, err)
+	}
+	if err := g.V(id).EachNode(context.Background(), nil); err == nil {
+		t.Fatal("EachNode accepted a nil callback")
 	}
 }
 
@@ -568,7 +590,7 @@ func TestQuery_In(t *testing.T) {
 	g := NewTraversalSource(db)
 
 	// u2 <- In("LINK") == u1
-	res, err := g.V(u2).In("LINK").ToList()
+	res, err := g.V(u2).In("LINK").ToNodes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,13 +634,33 @@ func TestQuery_Repeat(t *testing.T) {
 	// Repeat(Out).Times(2)
 	res, err := g.V(a).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
 		return p.Out("NEXT")
-	}).Times(2).ToList()
+	}).Times(2).ToNodes()
 
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(res) != 1 {
 		t.Fatalf("expected 1 result (C), got %d", len(res))
+	}
+	if res[0].ID != c {
+		t.Fatalf("repeat result = %#v, want node %s", res[0], c)
+	}
+
+	var visited []Node
+	res, err = g.V(a).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
+		return p.Out("NEXT")
+	}).Until(func(node Node) bool {
+		visited = append(visited, node)
+		return node.ID == c
+	}).ToNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].ID != c {
+		t.Fatalf("Until result = %#v, want node %s", res, c)
+	}
+	if len(visited) != 3 || visited[0].ID != a || visited[2].ID != c {
+		t.Fatalf("Until predicate nodes = %#v, want A through C", visited)
 	}
 }
 
@@ -695,19 +737,19 @@ func TestQuery_IDsAvoidLabelMaterializationAcrossHops(t *testing.T) {
 	}
 
 	g := NewTraversalSource(db)
-	oneHop, err := g.V(a).Out("NEXT").IDs().ToList()
+	oneHop, err := g.V(a).Out("NEXT").IDs().ToIDs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []interface{}{b}; !reflect.DeepEqual(oneHop, want) {
+	if want := []uuid.UUID{b}; !reflect.DeepEqual(oneHop, want) {
 		t.Fatalf("one-hop IDs = %#v, want %#v", oneHop, want)
 	}
 
-	twoHops, err := g.V(a).Out("NEXT").Out("NEXT").IDs().ToList()
+	twoHops, err := g.V(a).Out("NEXT").Out("NEXT").IDs().ToIDs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []interface{}{c}; !reflect.DeepEqual(twoHops, want) {
+	if want := []uuid.UUID{c}; !reflect.DeepEqual(twoHops, want) {
 		t.Fatalf("two-hop IDs = %#v, want %#v", twoHops, want)
 	}
 
@@ -729,7 +771,7 @@ func TestQuery_Limit_Count_Placeholder(t *testing.T) {
 	defer closeTestResource(t, db)
 	g := NewTraversalSource(db)
 
-	p := g.V().Emit().Until(func(i interface{}) bool { return true })
+	p := g.V().Emit().Until(func(Node) bool { return true })
 	if p == nil {
 		t.Error("Emit/Until returned nil")
 	}

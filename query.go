@@ -112,7 +112,7 @@ type Step func(tx *Tx, prev Iterator) Iterator
 // RepeatConfig holds configuration for repeat steps (loops).
 type RepeatConfig struct {
 	sub   func(*TraversalPipeline) *TraversalPipeline
-	until Predicate
+	until NodePredicate
 	times int
 	emit  bool
 }
@@ -175,39 +175,29 @@ func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline {
 	return tp
 }
 
-// HasLabel filters the current stream of elements, keeping only those with the specified label(s).
+// HasLabel filters the current node stream, keeping only nodes with one of the
+// specified labels.
 func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline {
 	tp.activeRepeat = nil
-	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
-		// Filter logic
-		return newFilterIterator(prev, func(val interface{}) bool {
-			// We need to know if val is Node or Edge and check label
-			// iterators return typed data via interface methods?
-			// Generic Iterator returns Key/Value access?
-			// Let's rely on extracting objects for now.
-			// This requires identifying if current stream is Nodes or Edges.
-			// Complex. For V1 simplification: assume NodeIterator for HasLabel after V()?
-			// But after Out(), stream is Edges? Spec says Out() moves to Neighbor Nodes.
-			// Ah: Out() -> Neighbor Nodes. OutE() -> Incident Edges.
-			// So Out() stream is Nodes.
-
-			// Simplest: Check if item has Label() method or struct field?
-			// Our iterators (NodeIterator/EdgeIterator) have distinct methods.
-			// We might need a unified "Element" interface for items in stream?
-			// Or cast.
-			if s, ok := val.(struct {
-				ID    uuid.UUID
-				Label string
-			}); ok {
-				for _, l := range labels {
-					if s.Label == l {
-						return true
-					}
-				}
-			}
-			return false
+	labelSet := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		labelSet[label] = struct{}{}
+	}
+	tp.steps = append(tp.steps, func(_ *Tx, prev Iterator) Iterator {
+		return newNodeFilterIterator(prev, func(node Node) bool {
+			_, matches := labelSet[node.Label]
+			return matches
 		})
 	})
+	return tp
+}
+
+// Until terminates the active Repeat when pred returns true for the current
+// materialized Node. Calling Until without an active Repeat has no effect.
+func (tp *TraversalPipeline) Until(pred NodePredicate) *TraversalPipeline {
+	if tp.activeRepeat != nil {
+		tp.activeRepeat.until = pred
+	}
 	return tp
 }
 
@@ -229,18 +219,6 @@ func (tp *TraversalPipeline) Repeat(sub func(*TraversalPipeline) *TraversalPipel
 	return tp
 }
 
-// Until terminates a Repeat loop when the predicate is true for the current element.
-func (tp *TraversalPipeline) Until(pred Predicate) *TraversalPipeline {
-	if tp.activeRepeat != nil {
-		tp.activeRepeat.until = pred
-	}
-	// Don't close activeRepeat yet?
-	// Usually modifiers can be chained: .Repeat().Times().Until().
-	// We close implicitly at next step or explicitly?
-	// Let's keep it open until a non-modifier step is added.
-	return tp
-}
-
 // Times terminates a Repeat loop after a fixed number of iterations.
 func (tp *TraversalPipeline) Times(n int) *TraversalPipeline {
 	if tp.activeRepeat != nil {
@@ -259,7 +237,8 @@ func (tp *TraversalPipeline) Emit() *TraversalPipeline {
 }
 
 // Path transforms the current stream into immutable Path values containing the
-// ordered nodes and edges visited for each result.
+// ordered nodes and edges visited for each result. Collect them with ToPaths or
+// stream them with EachPath.
 // Usage:
 //
 //	g.V().Out().Path()
@@ -278,7 +257,8 @@ func (tp *TraversalPipeline) Path() *TraversalPipeline {
 // Projection Steps
 
 // IDs projects UUIDs from the current node stream. Unlike materializing nodes
-// with ToList, this projection does not load node labels.
+// with ToNodes, this projection does not load node labels. Collect the result
+// with ToIDs or stream it with EachID.
 func (tp *TraversalPipeline) IDs() *TraversalPipeline {
 	tp.activeRepeat = nil
 	tp.steps = append(tp.steps, func(_ *Tx, prev Iterator) Iterator {
@@ -306,17 +286,63 @@ func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
 // is returned after all traversal resources have been closed. Cancellation is
 // checked while building and advancing the traversal.
 //
-// Unprojected nodes and edges are passed as Node and Edge values; projections
-// retain their documented result types. The values passed to yield own their
-// data and remain valid after yield returns.
-func (tp *TraversalPipeline) Each(ctx context.Context, yield func(interface{}) error) (err error) {
+// Unprojected nodes and edges are passed as Node and Edge values. IDs emits
+// uuid.UUID, Path emits Path, and Values emits the dynamic property types
+// documented by Predicate. The values passed to yield own their data and
+// remain valid after yield returns. Prefer a typed EachNode, EachEdge,
+// EachPath, or EachID terminal for statically typed results.
+func (tp *TraversalPipeline) Each(ctx context.Context, yield func(any) error) (err error) {
 	return tp.each(ctx, yield, nil)
+}
+
+// EachNode executes a node traversal and calls yield for every Node. It
+// returns ErrTraversalResult when the final pipeline step emits another type.
+func (tp *TraversalPipeline) EachNode(ctx context.Context, yield func(Node) error) error {
+	return eachTyped(tp, ctx, resultShapeNode, "pathway.Node", yield)
+}
+
+// EachEdge executes an edge traversal and calls yield for every Edge. It
+// returns ErrTraversalResult when the final pipeline step emits another type.
+func (tp *TraversalPipeline) EachEdge(ctx context.Context, yield func(Edge) error) error {
+	return eachTyped(tp, ctx, resultShapeEdge, "pathway.Edge", yield)
+}
+
+// EachPath executes a traversal ending in Path and calls yield for every Path.
+// It returns ErrTraversalResult when the final pipeline step emits another
+// type.
+func (tp *TraversalPipeline) EachPath(ctx context.Context, yield func(Path) error) error {
+	return eachTyped(tp, ctx, resultShapePath, "pathway.Path", yield)
+}
+
+// EachID executes a traversal ending in IDs and calls yield for every UUID. It
+// returns ErrTraversalResult when the final pipeline step emits another type.
+func (tp *TraversalPipeline) EachID(ctx context.Context, yield func(uuid.UUID) error) error {
+	return eachTyped(tp, ctx, resultShapeID, "uuid.UUID", yield)
+}
+
+func eachTyped[T any](
+	tp *TraversalPipeline,
+	ctx context.Context,
+	shape traversalResultShape,
+	expected string,
+	yield func(T) error,
+) error {
+	if yield == nil {
+		return errors.New("pathway: nil traversal callback")
+	}
+	return tp.each(ctx, func(value any) error {
+		typed, ok := value.(T)
+		if !ok {
+			return fmt.Errorf("%w: got %T, want %s", ErrTraversalResult, value, expected)
+		}
+		return yield(typed)
+	}, requireResultShape(shape, expected))
 }
 
 func (tp *TraversalPipeline) each(
 	ctx context.Context,
-	yield func(interface{}) error,
-	iteratorReady func(Iterator),
+	yield func(any) error,
+	iteratorReady func(Iterator) error,
 ) (err error) {
 	if tp.db == nil {
 		return ErrInvalidDatabase
@@ -370,7 +396,9 @@ func (tp *TraversalPipeline) each(
 		return errors.New("pipeline contains no traversal steps")
 	}
 	if iteratorReady != nil {
-		iteratorReady(iter)
+		if err = iteratorReady(iter); err != nil {
+			return err
+		}
 	}
 
 	for {
@@ -384,7 +412,7 @@ func (tp *TraversalPipeline) each(
 			return err
 		}
 
-		var result interface{}
+		var result any
 		switch current := iter.(type) {
 		case resultIterator:
 			result, err = current.Result()
@@ -415,31 +443,157 @@ func (tp *TraversalPipeline) each(
 	return ctx.Err()
 }
 
-// ToList executes the traversal pipeline and returns materialized results.
-// Unprojected nodes and edges are returned as Node and Edge values;
-// projections retain their documented result types. To consume large results
-// with bounded memory, use Each.
-func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
+// ToList executes the traversal pipeline and returns dynamic materialized
+// results. Nodes use Node, edges use Edge, IDs uses uuid.UUID, Path uses Path,
+// and Values uses the property types documented by Predicate. Prefer ToNodes,
+// ToEdges, ToIDs, or ToPaths for statically typed results. To consume dynamic
+// results with bounded memory, use Each.
+func (tp *TraversalPipeline) ToList() (results []any, err error) {
 	return tp.ToListContext(context.Background())
 }
 
 // ToListContext executes the traversal pipeline with ctx and returns
 // materialized results. Cancellation stops planning, reads, scans, repeats,
 // and result collection, and is propagated to observability hooks.
-func (tp *TraversalPipeline) ToListContext(ctx context.Context) (results []interface{}, err error) {
+func (tp *TraversalPipeline) ToListContext(ctx context.Context) (results []any, err error) {
 	resultCapacity := 16
-	err = tp.each(ctx, func(value interface{}) error {
+	err = tp.each(ctx, func(value any) error {
 		if results == nil {
-			results = make([]interface{}, 0, resultCapacity)
+			results = make([]any, 0, resultCapacity)
 		}
 		results = append(results, value)
 		return nil
-	}, func(iter Iterator) {
+	}, func(iter Iterator) error {
 		if hinted, ok := iter.(resultSizeHinter); ok {
 			if hint := hinted.ResultSizeHint(); hint > 0 {
 				resultCapacity = hint
 			}
 		}
+		return nil
 	})
 	return results, err
+}
+
+// ToNodes executes a node traversal and returns its materialized Node values.
+// It returns ErrTraversalResult when the final pipeline step emits another
+// type. Use EachNode to consume large node result sets with bounded memory.
+func (tp *TraversalPipeline) ToNodes() ([]Node, error) {
+	return tp.ToNodesContext(context.Background())
+}
+
+// ToNodesContext is ToNodes with cancellation and observability context.
+func (tp *TraversalPipeline) ToNodesContext(ctx context.Context) ([]Node, error) {
+	return collectTyped[Node](tp, ctx, resultShapeNode, "pathway.Node")
+}
+
+// ToEdges executes an edge traversal and returns its materialized Edge values.
+// It returns ErrTraversalResult when the final pipeline step emits another
+// type. Use EachEdge to consume large edge result sets with bounded memory.
+func (tp *TraversalPipeline) ToEdges() ([]Edge, error) {
+	return tp.ToEdgesContext(context.Background())
+}
+
+// ToEdgesContext is ToEdges with cancellation and observability context.
+func (tp *TraversalPipeline) ToEdgesContext(ctx context.Context) ([]Edge, error) {
+	return collectTyped[Edge](tp, ctx, resultShapeEdge, "pathway.Edge")
+}
+
+// ToPaths executes a traversal ending in Path and returns typed path snapshots.
+// It returns ErrTraversalResult when the final pipeline step emits another
+// type. Use EachPath to consume large path result sets with bounded memory.
+func (tp *TraversalPipeline) ToPaths() ([]Path, error) {
+	return tp.ToPathsContext(context.Background())
+}
+
+// ToPathsContext is ToPaths with cancellation and observability context.
+func (tp *TraversalPipeline) ToPathsContext(ctx context.Context) ([]Path, error) {
+	return collectTyped[Path](tp, ctx, resultShapePath, "pathway.Path")
+}
+
+// ToIDs executes a traversal ending in IDs and returns typed UUID values. It
+// returns ErrTraversalResult when the final pipeline step emits another type.
+// Use EachID to consume large ID result sets with bounded memory.
+func (tp *TraversalPipeline) ToIDs() ([]uuid.UUID, error) {
+	return tp.ToIDsContext(context.Background())
+}
+
+// ToIDsContext is ToIDs with cancellation and observability context.
+func (tp *TraversalPipeline) ToIDsContext(ctx context.Context) ([]uuid.UUID, error) {
+	return collectTyped[uuid.UUID](tp, ctx, resultShapeID, "uuid.UUID")
+}
+
+func collectTyped[T any](
+	tp *TraversalPipeline,
+	ctx context.Context,
+	shape traversalResultShape,
+	expected string,
+) (results []T, err error) {
+	resultCapacity := 16
+	err = tp.each(ctx, func(value any) error {
+		typed, ok := value.(T)
+		if !ok {
+			return fmt.Errorf("%w: got %T, want %s", ErrTraversalResult, value, expected)
+		}
+		if results == nil {
+			results = make([]T, 0, resultCapacity)
+		}
+		results = append(results, typed)
+		return nil
+	}, func(iter Iterator) error {
+		if err := validateResultShape(iter, shape, expected); err != nil {
+			return err
+		}
+		if hinted, ok := iter.(resultSizeHinter); ok {
+			if hint := hinted.ResultSizeHint(); hint > 0 {
+				resultCapacity = hint
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func requireResultShape(shape traversalResultShape, expected string) func(Iterator) error {
+	return func(iter Iterator) error {
+		return validateResultShape(iter, shape, expected)
+	}
+}
+
+func validateResultShape(iter Iterator, expected traversalResultShape, name string) error {
+	actual := resultShapeDynamic
+	switch current := iter.(type) {
+	case resultIterator:
+		actual = current.ResultShape()
+	case NodeIterator:
+		actual = resultShapeNode
+	case EdgeIterator:
+		actual = resultShapeEdge
+	}
+	if actual != expected {
+		return fmt.Errorf(
+			"%w: got %s, want %s",
+			ErrTraversalResult,
+			resultShapeName(actual),
+			name,
+		)
+	}
+	return nil
+}
+
+func resultShapeName(shape traversalResultShape) string {
+	switch shape {
+	case resultShapeNode:
+		return "pathway.Node"
+	case resultShapeEdge:
+		return "pathway.Edge"
+	case resultShapeID:
+		return "uuid.UUID"
+	case resultShapePath:
+		return "pathway.Path"
+	default:
+		return "dynamic value"
+	}
 }

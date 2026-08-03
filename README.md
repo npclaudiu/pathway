@@ -165,8 +165,9 @@ Pathway currently supports these Gremlin-inspired traversal steps:
 `IDs` emits node UUIDs without loading labels, which is useful for high-degree
 traversals. `Values` emits one scalar for each requested property that exists.
 `Path` returns a typed `pathway.Path` containing ordered node and edge elements.
-An unprojected `ToList` returns exported `pathway.Node` or `pathway.Edge`
-values, so callers do not need map keys or value assertions for element fields.
+Use `ToNodes`, `ToEdges`, `ToPaths`, or `ToIDs` to collect common result shapes
+without type assertions. `Values` remains dynamic because a property can be any
+supported scalar, list, or map; collect it with `ToList`.
 Labels passed to `Out` or `In` use exact Pebble ranges instead of scanning
 unrelated adjacency entries; multi-label results have deterministic storage-key
 order regardless of argument order.
@@ -180,26 +181,29 @@ query, err := g.VStrings(textID)
 if err != nil {
 	return err
 }
-results, err := query.Out("FOLLOWS").ToList()
+results, err := query.Out("FOLLOWS").ToNodes()
 ```
 
-Large traversals can be consumed with bounded memory by using `Each`:
+Large traversals can be consumed with bounded memory by using the typed
+streaming terminal for their result shape:
 
 ```go
-err := g.V().HasLabel("Person").Each(ctx, func(result interface{}) error {
-	person := result.(pathway.Node)
+err := g.V().HasLabel("Person").EachNode(ctx, func(person pathway.Node) error {
 	fmt.Println(person.ID)
 	return nil
 })
 ```
 
-`Each` propagates its context to query hooks and stops on cancellation or when
-the callback returns an error. In every case, it closes the traversal iterators
-and read transaction before returning.
+`EachNode`, `EachEdge`, `EachPath`, and `EachID` propagate their context to query
+hooks and stop on cancellation or when the callback returns an error. In every
+case, they close the traversal iterators and read transaction before returning.
+They return `ErrTraversalResult` if the pipeline's final result shape does not
+match the selected terminal.
 
-Use `ToListContext(ctx)` when results should still be collected but planning,
-reads, scans, repeats, and collection must stop if the caller cancels. Plain
-`ToList()` remains available and uses `context.Background()`.
+Each typed collection terminal has a context variant, such as
+`ToNodesContext(ctx)`, for cancelling planning, reads, scans, repeats, and
+collection. `Each` and `ToList` remain the dynamic terminals for `Values` and
+custom pipelines.
 
 ## Documentation
 

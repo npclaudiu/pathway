@@ -331,7 +331,7 @@ func TestAPICoverage(t *testing.T) {
 
 		// A. Traversal
 		g := pathway.NewTraversalSource(db)
-		results, err := g.V(a).Out("LINK").ToList()
+		results, err := g.V(a).Out("LINK").ToNodes()
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
 		}
@@ -340,12 +340,8 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// Check result content
-		if node, ok := results[0].(pathway.Node); ok {
-			if node.ID != b || node.Label != "B" {
-				t.Errorf("Expected node B, got %#v", node)
-			}
-		} else {
-			t.Errorf("Expected pathway.Node result, got %T", results[0])
+		if node := results[0]; node.ID != b || node.Label != "B" {
+			t.Errorf("Expected node B, got %#v", node)
 		}
 
 		// B. Filtering
@@ -364,7 +360,7 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// Query: A.Out(LINK) should only return B
-		results, err = g.V(a).Out("LINK").ToList()
+		results, err = g.V(a).Out("LINK").ToNodes()
 		if err != nil {
 			t.Errorf("Query failed: %v", err)
 		}
@@ -373,7 +369,7 @@ func TestAPICoverage(t *testing.T) {
 		}
 
 		// Query: A.Out() should return B and C
-		results, err = g.V(a).Out().ToList()
+		results, err = g.V(a).Out().ToNodes()
 		if err != nil {
 			t.Errorf("Query failed: %v", err)
 		}

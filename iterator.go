@@ -46,11 +46,22 @@ type NodeIterator interface {
 	Node() (uuid.UUID, string, error)
 }
 
+type traversalResultShape uint8
+
+const (
+	resultShapeDynamic traversalResultShape = iota
+	resultShapeNode
+	resultShapeEdge
+	resultShapeID
+	resultShapePath
+)
+
 // resultIterator is implemented by query steps that project a materialized
 // value rather than a graph element.
 type resultIterator interface {
 	Iterator
-	Result() (interface{}, error)
+	Result() (any, error)
+	ResultShape() traversalResultShape
 }
 
 // resultSizeHinter provides an upper bound for terminal preallocation. Most
@@ -652,60 +663,58 @@ func (it *flatMapEdgeIterator) Path() Path {
 	return p
 }
 
-// filterIterator
-type filterIterator struct {
+// nodeFilterIterator filters a node stream with a typed predicate.
+type nodeFilterIterator struct {
 	prev Iterator
-	pred func(interface{}) bool
+	pred NodePredicate
+	err  error
 }
 
-func newFilterIterator(prev Iterator, pred func(interface{}) bool) *filterIterator {
-	return &filterIterator{prev: prev, pred: pred}
+func newNodeFilterIterator(prev Iterator, pred NodePredicate) *nodeFilterIterator {
+	return &nodeFilterIterator{prev: prev, pred: pred}
 }
 
-func (it *filterIterator) Next() bool {
+func (it *nodeFilterIterator) Next() bool {
+	nodes, ok := it.prev.(NodeIterator)
+	if !ok {
+		it.err = errors.New("pipeline type mismatch: node filter requires nodes")
+		return false
+	}
 	for it.prev.Next() {
-		var val interface{}
-		if ni, ok := it.prev.(NodeIterator); ok {
-			id, lbl, _ := ni.Node()
-			val = struct {
-				ID    uuid.UUID
-				Label string
-			}{id, lbl}
-		} // TODO: Add Edge case logic for values
-
-		if it.pred(val) {
+		id, label, err := nodes.Node()
+		if err != nil {
+			it.err = err
+			return false
+		}
+		if it.pred(Node{ID: id, Label: label}) {
 			return true
 		}
 	}
 	return false
 }
 
-func (it *filterIterator) Close() error         { return it.prev.Close() }
-func (it *filterIterator) Error() error         { return it.prev.Error() }
-func (it *filterIterator) Key() []byte          { return it.prev.Key() }
-func (it *filterIterator) Value() []byte        { return it.prev.Value() }
-func (it *filterIterator) Valid() bool          { return it.prev.Valid() }
-func (it *filterIterator) SeekGE(k []byte) bool { return it.prev.SeekGE(k) }
-func (it *filterIterator) Path() Path           { return it.prev.Path() }
+func (it *nodeFilterIterator) Close() error { return it.prev.Close() }
+func (it *nodeFilterIterator) Error() error {
+	return errors.Join(it.err, it.prev.Error())
+}
+func (it *nodeFilterIterator) Key() []byte          { return it.prev.Key() }
+func (it *nodeFilterIterator) Value() []byte        { return it.prev.Value() }
+func (it *nodeFilterIterator) Valid() bool          { return it.err == nil && it.prev.Valid() }
+func (it *nodeFilterIterator) SeekGE(k []byte) bool { return it.prev.SeekGE(k) }
+func (it *nodeFilterIterator) Path() Path           { return it.prev.Path() }
 
-func (it *filterIterator) Node() (uuid.UUID, string, error) {
+func (it *nodeFilterIterator) Node() (uuid.UUID, string, error) {
 	if ni, ok := it.prev.(NodeIterator); ok {
 		return ni.Node()
 	}
 	return uuid.Nil, "", errors.New("not a node iterator")
 }
-func (it *filterIterator) NodeID() (uuid.UUID, error) { return currentNodeID(it.prev) }
-func (it *filterIterator) ResultSizeHint() int {
+func (it *nodeFilterIterator) NodeID() (uuid.UUID, error) { return currentNodeID(it.prev) }
+func (it *nodeFilterIterator) ResultSizeHint() int {
 	if hinted, ok := it.prev.(resultSizeHinter); ok {
 		return hinted.ResultSizeHint()
 	}
 	return 0
-}
-func (it *filterIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
-	if ei, ok := it.prev.(EdgeIterator); ok {
-		return ei.Edge()
-	}
-	return uuid.Nil, uuid.Nil, "", errors.New("not an edge iterator")
 }
 
 // valueIterator projects requested property values as a scalar stream.
@@ -713,8 +722,8 @@ type valueIterator struct {
 	tx      *Tx
 	prev    Iterator
 	keys    []string
-	pending []interface{}
-	current interface{}
+	pending []any
+	current any
 	valid   bool
 	err     error
 }
@@ -774,7 +783,7 @@ func (it *valueIterator) Next() bool {
 	}
 }
 
-func (it *valueIterator) Result() (interface{}, error) {
+func (it *valueIterator) Result() (any, error) {
 	if !it.valid {
 		if err := it.Error(); err != nil {
 			return nil, err
@@ -783,6 +792,8 @@ func (it *valueIterator) Result() (interface{}, error) {
 	}
 	return it.current, nil
 }
+
+func (it *valueIterator) ResultShape() traversalResultShape { return resultShapeDynamic }
 
 func (it *valueIterator) Close() error       { return it.prev.Close() }
 func (it *valueIterator) Key() []byte        { return nil }
@@ -823,9 +834,11 @@ func (it *pathIterator) Value() []byte {
 	return nil
 }
 
-func (it *pathIterator) Result() (interface{}, error) {
+func (it *pathIterator) Result() (any, error) {
 	return append(Path(nil), it.curPath...), nil
 }
+
+func (it *pathIterator) ResultShape() traversalResultShape { return resultShapePath }
 
 func (it *pathIterator) Close() error         { return it.prev.Close() }
 func (it *pathIterator) Error() error         { return it.prev.Error() }
@@ -841,8 +854,7 @@ func (it *pathIterator) ResultSizeHint() int {
 
 // repeatIterator implements BFS traversal
 type traverser struct {
-	id    uuid.UUID
-	label string
+	node  Node
 	path  Path
 	depth int
 }
@@ -867,22 +879,22 @@ func (it *repeatIterator) Next() bool {
 	}
 	if !it.inited {
 		// Drain prev into queue
+		nodes, ok := it.prev.(NodeIterator)
+		if !ok {
+			it.err = errors.New("pipeline type mismatch: repeat requires nodes")
+			return false
+		}
 		for it.prev.Next() {
 			if it.contextCanceled() {
 				return false
 			}
-			var id uuid.UUID
-			var lbl string
-			if ni, ok := it.prev.(NodeIterator); ok {
-				var err error
-				id, lbl, err = ni.Node()
-				if err != nil {
-					it.err = err
-					return false
-				}
+			id, lbl, err := nodes.Node()
+			if err != nil {
+				it.err = err
+				return false
 			}
 			it.queue = append(it.queue, traverser{
-				id: id, label: lbl, path: it.prev.Path(), depth: 0,
+				node: Node{ID: id, Label: lbl}, path: it.prev.Path(), depth: 0,
 			})
 		}
 		if err := it.prev.Error(); err != nil {
@@ -901,13 +913,9 @@ func (it *repeatIterator) Next() bool {
 		it.queue = it.queue[1:]
 
 		// Check termination
-		val := struct {
-			ID    uuid.UUID
-			Label string
-		}{cur.id, cur.label}
 		stop := false
 		if it.conf.until != nil {
-			if it.conf.until(val) {
+			if it.conf.until(cur.node) {
 				stop = true
 			}
 		}
@@ -923,7 +931,7 @@ func (it *repeatIterator) Next() bool {
 		// Recurse
 		startIter := &fixedNodeIterator{
 			tx:  it.tx,
-			ids: []uuid.UUID{cur.id},
+			ids: []uuid.UUID{cur.node.ID},
 			idx: -1,
 		}
 
@@ -957,16 +965,22 @@ func (it *repeatIterator) Next() bool {
 					it.err = errors.Join(it.err, iter.Close())
 					return false
 				}
-				if ni, ok := iter.(NodeIterator); ok {
-					nid, nlbl, err := ni.Node()
-					if err != nil {
-						it.err = errors.Join(err, iter.Close())
-						return false
-					}
-					it.queue = append(it.queue, traverser{
-						id: nid, label: nlbl, path: iter.Path(), depth: cur.depth + 1,
-					})
+				nodes, ok := iter.(NodeIterator)
+				if !ok {
+					it.err = errors.Join(
+						errors.New("pipeline type mismatch: repeat body must return nodes"),
+						iter.Close(),
+					)
+					return false
 				}
+				nid, nlbl, err := nodes.Node()
+				if err != nil {
+					it.err = errors.Join(err, iter.Close())
+					return false
+				}
+				it.queue = append(it.queue, traverser{
+					node: Node{ID: nid, Label: nlbl}, path: iter.Path(), depth: cur.depth + 1,
+				})
 			}
 			if err := errors.Join(iter.Error(), iter.Close()); err != nil {
 				it.err = err
@@ -995,13 +1009,13 @@ func (it *repeatIterator) contextCanceled() bool {
 }
 
 func (it *repeatIterator) Node() (uuid.UUID, string, error) {
-	return it.curItem.id, it.curItem.label, nil
+	return it.curItem.node.ID, it.curItem.node.Label, nil
 }
-func (it *repeatIterator) NodeID() (uuid.UUID, error) { return it.curItem.id, it.err }
+func (it *repeatIterator) NodeID() (uuid.UUID, error) { return it.curItem.node.ID, it.err }
 func (it *repeatIterator) Close() error               { return it.prev.Close() }
 func (it *repeatIterator) Error() error               { return it.err }
-func (it *repeatIterator) Key() []byte                { return encoding.EncodeNodeKey(it.curItem.id) }
-func (it *repeatIterator) Value() []byte              { return []byte(it.curItem.label) }
+func (it *repeatIterator) Key() []byte                { return encoding.EncodeNodeKey(it.curItem.node.ID) }
+func (it *repeatIterator) Value() []byte              { return []byte(it.curItem.node.Label) }
 func (it *repeatIterator) Valid() bool                { return true }
 func (it *repeatIterator) SeekGE(k []byte) bool       { return false }
 func (it *repeatIterator) Path() Path                 { return it.curItem.path }
@@ -1136,7 +1150,7 @@ func (it *idIterator) Next() bool {
 	return true
 }
 
-func (it *idIterator) Result() (interface{}, error) {
+func (it *idIterator) Result() (any, error) {
 	if !it.valid {
 		if err := it.Error(); err != nil {
 			return nil, err
@@ -1145,6 +1159,8 @@ func (it *idIterator) Result() (interface{}, error) {
 	}
 	return it.current, nil
 }
+
+func (it *idIterator) ResultShape() traversalResultShape { return resultShapeID }
 
 func (it *idIterator) Close() error       { return it.prev.Close() }
 func (it *idIterator) Key() []byte        { return nil }

@@ -11,6 +11,7 @@ var (
 	ErrEdgeNotFound      = errors.New("edge not found")
 	ErrEntityNotFound    = errors.New("node or edge not found")
 	ErrInvalidNodeID     = errors.New("invalid textual node ID")
+	ErrTraversalResult   = errors.New("unexpected traversal result type")
 	ErrDanglingEdge      = errors.New("cannot create edge: source or target node does not exist")
 	ErrUnsupportedSchema = errors.New("unsupported pathway storage schema")
 	ErrInvalidDurability = errors.New("invalid durability mode")

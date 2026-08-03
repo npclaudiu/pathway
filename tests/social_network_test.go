@@ -167,7 +167,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 		results, err := g.
 			V(users["Alice"]).
 			Out("FOLLOWS").
-			ToList()
+			ToNodes()
 
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
@@ -178,10 +178,8 @@ func TestSocialNetworkQueries(t *testing.T) {
 		}
 		// Expect Bob and Charlie
 		found := make(map[uuid.UUID]bool)
-		for _, r := range results {
-			if node, ok := r.(pathway.Node); ok {
-				found[node.ID] = true
-			}
+		for _, node := range results {
+			found[node.ID] = true
 		}
 		if !found[users["Bob"]] || !found[users["Charlie"]] {
 			t.Errorf("Expected Bob and Charlie, got IDs: %v", results)
@@ -197,7 +195,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 			V(users["Alice"]).
 			Out("FOLLOWS"). // Friends
 			Out("FOLLOWS"). // FOAF
-			ToList()
+			ToNodes()
 
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
@@ -205,14 +203,12 @@ func TestSocialNetworkQueries(t *testing.T) {
 
 		// Verify we got Charlie and Dave
 		foundNames := 0
-		for _, r := range results {
-			if node, ok := r.(pathway.Node); ok {
-				switch node.ID {
-				case users["Charlie"]:
-					foundNames++
-				case users["Dave"]:
-					foundNames++
-				}
+		for _, node := range results {
+			switch node.ID {
+			case users["Charlie"]:
+				foundNames++
+			case users["Dave"]:
+				foundNames++
 			}
 		}
 
@@ -230,7 +226,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 			V(users["Alice"]).
 			Out("FOLLOWS").
 			Out("POSTED").
-			ToList()
+			ToNodes()
 
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
@@ -249,7 +245,7 @@ func TestSocialNetworkQueries(t *testing.T) {
 		results, err := g.
 			V(posts["AliceIntro"]).
 			In("LIKED").
-			ToList()
+			ToNodes()
 
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
@@ -259,12 +255,8 @@ func TestSocialNetworkQueries(t *testing.T) {
 			t.Fatalf("Expected 1 liker, got %d", len(results))
 		}
 		// Expect Bob
-		if node, ok := results[0].(pathway.Node); ok {
-			if node.ID != users["Bob"] {
-				t.Errorf("Expected Bob to like the post, got %v", node.ID)
-			}
-		} else {
-			t.Errorf("Result is %T, want pathway.Node", results[0])
+		if results[0].ID != users["Bob"] {
+			t.Errorf("Expected Bob to like the post, got %v", results[0].ID)
 		}
 	})
 }

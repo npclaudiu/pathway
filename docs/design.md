@@ -25,7 +25,8 @@ is designed around these choices:
 - Graph mutations update all denormalized records in one Pebble batch.
 - Reads are exposed both as typed transaction operations and as lazy iterators.
 - The fluent traversal API builds a pipeline of iterator transformations and
-  materializes it in a read snapshot at `ToList`.
+  executes it in a read snapshot through typed collection or streaming
+  terminals.
 - Node-property indexes are explicitly configured by label/property pair,
   persisted in the store, and support exact typed equality only.
 
@@ -526,9 +527,10 @@ bound. Multiple labels become sorted, deduplicated, disjoint bounded iterators
 consumed one at a time, so unrelated labels are never advanced through and only
 one Pebble iterator is open at once.
 
-`HasLabel` currently assumes a node stream and evaluates an anonymous
-`{ID, Label}` value. There is no general typed element algebra or query planner;
-pipeline type compatibility is enforced dynamically at iteration time.
+`HasLabel` accepts a node stream and evaluates an exported `Node` through a
+`NodePredicate`. Navigation and repeat steps preserve that typed node shape.
+There is no compile-time element algebra or query planner; pipeline type
+compatibility is enforced dynamically at iteration time.
 
 ### Terminal execution
 
@@ -544,28 +546,34 @@ pipeline type compatibility is enforced dynamically at iteration time.
 7. Invoke the query-end hook with duration and the final error.
 
 Returning an error from the callback terminates the traversal and still runs
-all cleanup. `Each` checks cancellation before building each step and before
-and after iterator advancement, returning the context error promptly between
-results. `ToListContext` uses the same executor and appends each streamed value
-to a result slice. `ToList` delegates to it with `context.Background` for
-backwards compatibility.
+all cleanup. Every streaming terminal checks cancellation before building each
+step and before and after iterator advancement, returning the context error
+promptly between results. Typed collection terminals have matching context
+variants and delegate to `context.Background` otherwise.
 
-Terminal results depend on the final iterator:
+Public terminal result shapes are:
 
-- projected `resultIterator` values, including UUIDs from `IDs`, are appended
-  directly;
-- nodes become exported `Node` values containing UUID and label;
-- edges become exported `Edge` values containing edge UUID, relative endpoint,
-  and label;
-- an unknown generic iterator falls back to an owned copy of its raw key.
+| Final stream | Collection terminal | Streaming terminal | Result shape |
+|---|---|---|---|
+| node (`V`, `Out`, `In`, `HasLabel`, `Repeat`) | `ToNodes[Context]` | `EachNode` | `Node{ID uuid.UUID, Label string}` |
+| edge | `ToEdges[Context]` | `EachEdge` | `Edge{ID, Other uuid.UUID, Label string}`; `Other` is relative to traversal direction |
+| `IDs` | `ToIDs[Context]` | `EachID` | `uuid.UUID` |
+| `Path` | `ToPaths[Context]` | `EachPath` | `Path`, an owned ordered slice of `PathElement` values |
+| `Values` | `ToList[Context]` | `Each` | `any`, using the property type contract below |
 
-When collecting, `ToList` uses an iterator cardinality hint when one is
-available. Otherwise it starts with capacity 16, which covers common shallow
-traversals without the repeated slice growth previously visible in allocation
-profiles. Empty results remain nil and do not allocate a result backing slice.
-Struct values and copied fallback keys remain valid after the snapshot and
-Pebble iterators close. `Each` retains no result collection, so its memory use
-does not grow with result cardinality.
+Selecting a typed terminal that does not match the final stream returns
+`ErrTraversalResult` and no collected partial result. Dynamic `ToList` and
+`Each` remain available for property values and custom pipelines. An unknown
+generic iterator materializes as an owned raw-key byte slice through those
+dynamic terminals.
+
+Collection terminals use an iterator cardinality hint when one is available.
+Otherwise they start with capacity 16, which covers common shallow traversals
+without the repeated slice growth previously visible in allocation profiles.
+Empty results remain nil and do not allocate a result backing slice. Struct
+values and copied fallback keys remain valid after the snapshot and Pebble
+iterators close. Streaming terminals retain no result collection, so their
+memory use does not grow with result cardinality.
 
 Cancellation is checked during step planning, before and after terminal
 advancement, around point reads, on every Pebble iterator seek and advance, and
@@ -639,18 +647,21 @@ properties return `ErrNodeNotFound` even if the requested UUID was intended as
 an edge. Nil property values need additional defensive handling before this API
 can be considered robust.
 
-Predicate helpers are dynamically typed. `Gt` and `Lt` require matching `int`
-or `float64` types; they do not coerce between them. `Prefix` and `Contains`
-accept strings only. `Eq` uses interface equality and can panic when handed
-incomparable dynamic values such as maps or slices. Predicates are currently
-used most visibly by repeat termination; they are not a general indexed-filter
-language.
+`Until` accepts a `NodePredicate`, whose input is the owned current
+`Node{ID, Label}`. Property `Predicate` inputs follow the codec contract: `nil`,
+`bool`, `int64`, `uint64`, `float64`, `string`, `[]byte`, `[]any`, or
+`map[string]any`, recursively. `Eq` performs deep, type-sensitive equality and
+is safe for lists, maps, and byte slices. `Gt` and `Lt` compare every signed,
+unsigned, and floating Go numeric type by exact numeric value; unsupported
+types and NaN do not match. `Prefix` and `Contains` accept strings only. These
+helpers are not a general indexed-filter language.
 
 ## Errors and corruption behavior
 
 Public sentinel errors cover invalid database/snapshot handles, missing raw
-snapshot keys, missing nodes/edges/entities, dangling edge creation, and
-unsupported schema versions. Pebble errors such as `pebble.ErrNotFound`,
+snapshot keys, missing nodes/edges/entities, invalid textual node IDs, typed
+terminal mismatches, dangling edge creation, and unsupported schema versions.
+Pebble errors such as `pebble.ErrNotFound`,
 `pebble.ErrReadOnly`, and `pebble.ErrClosed` can also escape from public APIs.
 Encoding errors live in `internal/encoding` but are observable through iterator
 and mutation returns.
@@ -690,8 +701,8 @@ The principal costs and write amplification are architectural, not incidental:
 | Label-bearing one-hop traversal | adjacency scan plus one lazy node point read per edge |
 | Label-filtered adjacency | one exact bounded scan per unique requested label |
 | `Values` | one property point read and full decode per entity |
-| `Each` | snapshot lifecycle and typed value boxing; no result collection |
-| `ToList` | snapshot lifecycle, one result slice, and typed value boxing |
+| Streaming terminal | snapshot lifecycle and typed value boxing; no result collection |
+| Collection terminal | snapshot lifecycle, one typed or dynamic result slice, and value boxing |
 
 Write benchmarks exercise both synchronous and relaxed durability, with memory
 and disk backends under each mode. The benchmark harness seeds deterministic
@@ -742,7 +753,7 @@ assert both positive logical results and the physical absence of stale keys.
 6. Define ordering, duplicates, missing-property behavior, and materialized
    result shape.
 7. Test empty streams, construction failures, malformed data, and cleanup.
-8. Update `ToList` if a new terminal result category is introduced.
+8. Add or update the matching typed and dynamic terminal result shape.
 
 The pipeline is dynamically typed today. Prefer an explicit error over a panic
 or silent type mismatch.
