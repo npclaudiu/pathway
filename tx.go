@@ -263,6 +263,9 @@ func (tx *Tx) putEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error) {
 // SetProperties sets a map of properties for an existing node or edge. This
 // completely replaces any existing properties for that entity. It returns
 // ErrEntityNotFound if id identifies neither kind of entity.
+// Signed integers are stored and returned as int64, unsigned integers as
+// uint64, floats as float64, and byte slices remain byte slices. Lists and
+// nested maps recursively support the same property value types.
 //
 // Usage:
 //
@@ -499,7 +502,8 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error) {
 }
 
 // GetProperties retrieves the properties map for a given node or edge ID.
-// Returns nil if no properties exist.
+// Signed integers are returned as int64, unsigned integers as uint64, and
+// floats as float64. Returns nil if no properties exist.
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 	key := encoding.EncodePropertyKey(id)
 	val, err := tx.Get(key)

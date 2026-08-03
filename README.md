@@ -13,21 +13,13 @@ It provides a fluid, Gremlin-like query interface for natural graph traversals.
 go get github.com/npclaudiu/pathway
 ```
 
-### Upgrading existing databases
+### Development storage compatibility
 
-Pathway now uses Pebble v2. Before opening an on-disk database created by an
-earlier Pathway version, upgrade its Pebble format with the final v1 release:
-
-```bash
-go run github.com/cockroachdb/pebble/cmd/pebble@v1.1.5 db upgrade <db-dir>
-```
-
-Pebble format upgrades are permanent, so back up the database first. On its
-first open, Pathway then atomically migrates the original unversioned Pathway
-keys to schema version 3. Schema-v2 databases are also upgraded automatically.
-New and in-memory databases do not need the Pebble
-upgrade. A database written by a newer, unsupported Pathway schema is rejected
-with `ErrUnsupportedSchema`.
+Pathway currently uses schema version 4 and has not made a persistent-format
+compatibility promise. Unversioned stores and stores using earlier development
+schemas are rejected with `ErrUnsupportedSchema`; recreate them with the
+current release. Establish migrations and compatibility fixtures before using
+Pathway where stored data cannot be rebuilt.
 
 ## Quickstart
 
@@ -87,13 +79,16 @@ func main() {
 * **Nodes**: Atomic entities identified by **16-byte UUIDs**.
 * **Edges**: Directed, labeled connections with UUIDs and optional properties.
   Pathway is a multigraph, so parallel edges are preserved as distinct records.
-* **Properties**: JSON-compatible key-value pairs attached to existing nodes or
-  edges. Selected node properties can have exact, type-aware indexes.
+* **Properties**: Typed key-value maps attached to existing nodes or edges,
+  including signed and unsigned integers, floats, strings, bytes, booleans,
+  nulls, lists, and nested maps. Selected node properties can have exact,
+  type-aware indexes.
 * **Constraints**:
   * **Labels and indexed property names**: Maximum 65,535 UTF-8 bytes.
   * **IDs**: UUIDs only.
-  * **Properties**: Standard JSON-compatible values; indexed strings, numbers,
-    and booleans remain type-distinct.
+  * **Properties**: Signed integers decode as `int64`, unsigned integers as
+    `uint64`, and floating-point values as `float64`. Indexed signed, unsigned,
+    and floating-point values remain type-distinct.
 
 ### Property indexes
 
@@ -130,8 +125,7 @@ Both modes commit each `Update` as one atomic Pebble batch and make it visible
 before returning. `DurabilitySync` (the zero value) synchronizes the WAL before
 success is reported. `DurabilityNoSync` permits Pebble to buffer recent WAL
 writes in process memory, so a process or machine crash can lose successful
-updates. Schema migrations and index-definition changes always use synced
-commits.
+updates. Schema marker and index-definition changes always use synced commits.
 
 ### Bulk ingestion
 

@@ -9,7 +9,6 @@ package proto
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	structpb "google.golang.org/protobuf/types/known/structpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -22,9 +21,52 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type NullValue int32
+
+const (
+	NullValue_NULL_VALUE NullValue = 0
+)
+
+// Enum value maps for NullValue.
+var (
+	NullValue_name = map[int32]string{
+		0: "NULL_VALUE",
+	}
+	NullValue_value = map[string]int32{
+		"NULL_VALUE": 0,
+	}
+)
+
+func (x NullValue) Enum() *NullValue {
+	p := new(NullValue)
+	*p = x
+	return p
+}
+
+func (x NullValue) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (NullValue) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_proto_properties_proto_enumTypes[0].Descriptor()
+}
+
+func (NullValue) Type() protoreflect.EnumType {
+	return &file_internal_proto_properties_proto_enumTypes[0]
+}
+
+func (x NullValue) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use NullValue.Descriptor instead.
+func (NullValue) EnumDescriptor() ([]byte, []int) {
+	return file_internal_proto_properties_proto_rawDescGZIP(), []int{0}
+}
+
 type Properties struct {
-	state         protoimpl.MessageState     `protogen:"open.v1"`
-	Data          map[string]*structpb.Value `protobuf:"bytes,1,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Data          map[string]*PropertyValue `protobuf:"bytes,1,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -59,9 +101,291 @@ func (*Properties) Descriptor() ([]byte, []int) {
 	return file_internal_proto_properties_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Properties) GetData() map[string]*structpb.Value {
+func (x *Properties) GetData() map[string]*PropertyValue {
 	if x != nil {
 		return x.Data
+	}
+	return nil
+}
+
+type PropertyValue struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*PropertyValue_NullValue
+	//	*PropertyValue_BoolValue
+	//	*PropertyValue_IntValue
+	//	*PropertyValue_UintValue
+	//	*PropertyValue_DoubleValue
+	//	*PropertyValue_StringValue
+	//	*PropertyValue_BytesValue
+	//	*PropertyValue_ListValue
+	//	*PropertyValue_MapValue
+	Kind          isPropertyValue_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PropertyValue) Reset() {
+	*x = PropertyValue{}
+	mi := &file_internal_proto_properties_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PropertyValue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PropertyValue) ProtoMessage() {}
+
+func (x *PropertyValue) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_properties_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PropertyValue.ProtoReflect.Descriptor instead.
+func (*PropertyValue) Descriptor() ([]byte, []int) {
+	return file_internal_proto_properties_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PropertyValue) GetKind() isPropertyValue_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *PropertyValue) GetNullValue() NullValue {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_NullValue); ok {
+			return x.NullValue
+		}
+	}
+	return NullValue_NULL_VALUE
+}
+
+func (x *PropertyValue) GetBoolValue() bool {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_BoolValue); ok {
+			return x.BoolValue
+		}
+	}
+	return false
+}
+
+func (x *PropertyValue) GetIntValue() int64 {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_IntValue); ok {
+			return x.IntValue
+		}
+	}
+	return 0
+}
+
+func (x *PropertyValue) GetUintValue() uint64 {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_UintValue); ok {
+			return x.UintValue
+		}
+	}
+	return 0
+}
+
+func (x *PropertyValue) GetDoubleValue() float64 {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_DoubleValue); ok {
+			return x.DoubleValue
+		}
+	}
+	return 0
+}
+
+func (x *PropertyValue) GetStringValue() string {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_StringValue); ok {
+			return x.StringValue
+		}
+	}
+	return ""
+}
+
+func (x *PropertyValue) GetBytesValue() []byte {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_BytesValue); ok {
+			return x.BytesValue
+		}
+	}
+	return nil
+}
+
+func (x *PropertyValue) GetListValue() *PropertyList {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_ListValue); ok {
+			return x.ListValue
+		}
+	}
+	return nil
+}
+
+func (x *PropertyValue) GetMapValue() *PropertyMap {
+	if x != nil {
+		if x, ok := x.Kind.(*PropertyValue_MapValue); ok {
+			return x.MapValue
+		}
+	}
+	return nil
+}
+
+type isPropertyValue_Kind interface {
+	isPropertyValue_Kind()
+}
+
+type PropertyValue_NullValue struct {
+	NullValue NullValue `protobuf:"varint,1,opt,name=null_value,json=nullValue,proto3,enum=pathway.NullValue,oneof"`
+}
+
+type PropertyValue_BoolValue struct {
+	BoolValue bool `protobuf:"varint,2,opt,name=bool_value,json=boolValue,proto3,oneof"`
+}
+
+type PropertyValue_IntValue struct {
+	IntValue int64 `protobuf:"zigzag64,3,opt,name=int_value,json=intValue,proto3,oneof"`
+}
+
+type PropertyValue_UintValue struct {
+	UintValue uint64 `protobuf:"varint,4,opt,name=uint_value,json=uintValue,proto3,oneof"`
+}
+
+type PropertyValue_DoubleValue struct {
+	DoubleValue float64 `protobuf:"fixed64,5,opt,name=double_value,json=doubleValue,proto3,oneof"`
+}
+
+type PropertyValue_StringValue struct {
+	StringValue string `protobuf:"bytes,6,opt,name=string_value,json=stringValue,proto3,oneof"`
+}
+
+type PropertyValue_BytesValue struct {
+	BytesValue []byte `protobuf:"bytes,7,opt,name=bytes_value,json=bytesValue,proto3,oneof"`
+}
+
+type PropertyValue_ListValue struct {
+	ListValue *PropertyList `protobuf:"bytes,8,opt,name=list_value,json=listValue,proto3,oneof"`
+}
+
+type PropertyValue_MapValue struct {
+	MapValue *PropertyMap `protobuf:"bytes,9,opt,name=map_value,json=mapValue,proto3,oneof"`
+}
+
+func (*PropertyValue_NullValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_BoolValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_IntValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_UintValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_DoubleValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_StringValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_BytesValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_ListValue) isPropertyValue_Kind() {}
+
+func (*PropertyValue_MapValue) isPropertyValue_Kind() {}
+
+type PropertyList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        []*PropertyValue       `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PropertyList) Reset() {
+	*x = PropertyList{}
+	mi := &file_internal_proto_properties_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PropertyList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PropertyList) ProtoMessage() {}
+
+func (x *PropertyList) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_properties_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PropertyList.ProtoReflect.Descriptor instead.
+func (*PropertyList) Descriptor() ([]byte, []int) {
+	return file_internal_proto_properties_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PropertyList) GetValues() []*PropertyValue {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+type PropertyMap struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Values        map[string]*PropertyValue `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PropertyMap) Reset() {
+	*x = PropertyMap{}
+	mi := &file_internal_proto_properties_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PropertyMap) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PropertyMap) ProtoMessage() {}
+
+func (x *PropertyMap) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_properties_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PropertyMap.ProtoReflect.Descriptor instead.
+func (*PropertyMap) Descriptor() ([]byte, []int) {
+	return file_internal_proto_properties_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PropertyMap) GetValues() map[string]*PropertyValue {
+	if x != nil {
+		return x.Values
 	}
 	return nil
 }
@@ -70,13 +394,39 @@ var File_internal_proto_properties_proto protoreflect.FileDescriptor
 
 const file_internal_proto_properties_proto_rawDesc = "" +
 	"\n" +
-	"\x1finternal/proto/properties.proto\x12\apathway\x1a\x1cgoogle/protobuf/struct.proto\"\x90\x01\n" +
+	"\x1finternal/proto/properties.proto\x12\apathway\"\x90\x01\n" +
 	"\n" +
 	"Properties\x121\n" +
 	"\x04data\x18\x01 \x03(\v2\x1d.pathway.Properties.DataEntryR\x04data\x1aO\n" +
 	"\tDataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12,\n" +
-	"\x05value\x18\x02 \x01(\v2\x16.google.protobuf.ValueR\x05value:\x028\x01B-Z+github.com/npclaudiu/pathway/internal/protob\x06proto3"
+	"\x05value\x18\x02 \x01(\v2\x16.pathway.PropertyValueR\x05value:\x028\x01\"\x87\x03\n" +
+	"\rPropertyValue\x123\n" +
+	"\n" +
+	"null_value\x18\x01 \x01(\x0e2\x12.pathway.NullValueH\x00R\tnullValue\x12\x1f\n" +
+	"\n" +
+	"bool_value\x18\x02 \x01(\bH\x00R\tboolValue\x12\x1d\n" +
+	"\tint_value\x18\x03 \x01(\x12H\x00R\bintValue\x12\x1f\n" +
+	"\n" +
+	"uint_value\x18\x04 \x01(\x04H\x00R\tuintValue\x12#\n" +
+	"\fdouble_value\x18\x05 \x01(\x01H\x00R\vdoubleValue\x12#\n" +
+	"\fstring_value\x18\x06 \x01(\tH\x00R\vstringValue\x12!\n" +
+	"\vbytes_value\x18\a \x01(\fH\x00R\n" +
+	"bytesValue\x126\n" +
+	"\n" +
+	"list_value\x18\b \x01(\v2\x15.pathway.PropertyListH\x00R\tlistValue\x123\n" +
+	"\tmap_value\x18\t \x01(\v2\x14.pathway.PropertyMapH\x00R\bmapValueB\x06\n" +
+	"\x04kind\">\n" +
+	"\fPropertyList\x12.\n" +
+	"\x06values\x18\x01 \x03(\v2\x16.pathway.PropertyValueR\x06values\"\x9a\x01\n" +
+	"\vPropertyMap\x128\n" +
+	"\x06values\x18\x01 \x03(\v2 .pathway.PropertyMap.ValuesEntryR\x06values\x1aQ\n" +
+	"\vValuesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12,\n" +
+	"\x05value\x18\x02 \x01(\v2\x16.pathway.PropertyValueR\x05value:\x028\x01*\x1b\n" +
+	"\tNullValue\x12\x0e\n" +
+	"\n" +
+	"NULL_VALUE\x10\x00B-Z+github.com/npclaudiu/pathway/internal/protob\x06proto3"
 
 var (
 	file_internal_proto_properties_proto_rawDescOnce sync.Once
@@ -90,20 +440,31 @@ func file_internal_proto_properties_proto_rawDescGZIP() []byte {
 	return file_internal_proto_properties_proto_rawDescData
 }
 
-var file_internal_proto_properties_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_internal_proto_properties_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_internal_proto_properties_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_internal_proto_properties_proto_goTypes = []any{
-	(*Properties)(nil),     // 0: pathway.Properties
-	nil,                    // 1: pathway.Properties.DataEntry
-	(*structpb.Value)(nil), // 2: google.protobuf.Value
+	(NullValue)(0),        // 0: pathway.NullValue
+	(*Properties)(nil),    // 1: pathway.Properties
+	(*PropertyValue)(nil), // 2: pathway.PropertyValue
+	(*PropertyList)(nil),  // 3: pathway.PropertyList
+	(*PropertyMap)(nil),   // 4: pathway.PropertyMap
+	nil,                   // 5: pathway.Properties.DataEntry
+	nil,                   // 6: pathway.PropertyMap.ValuesEntry
 }
 var file_internal_proto_properties_proto_depIdxs = []int32{
-	1, // 0: pathway.Properties.data:type_name -> pathway.Properties.DataEntry
-	2, // 1: pathway.Properties.DataEntry.value:type_name -> google.protobuf.Value
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	5, // 0: pathway.Properties.data:type_name -> pathway.Properties.DataEntry
+	0, // 1: pathway.PropertyValue.null_value:type_name -> pathway.NullValue
+	3, // 2: pathway.PropertyValue.list_value:type_name -> pathway.PropertyList
+	4, // 3: pathway.PropertyValue.map_value:type_name -> pathway.PropertyMap
+	2, // 4: pathway.PropertyList.values:type_name -> pathway.PropertyValue
+	6, // 5: pathway.PropertyMap.values:type_name -> pathway.PropertyMap.ValuesEntry
+	2, // 6: pathway.Properties.DataEntry.value:type_name -> pathway.PropertyValue
+	2, // 7: pathway.PropertyMap.ValuesEntry.value:type_name -> pathway.PropertyValue
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_internal_proto_properties_proto_init() }
@@ -111,18 +472,30 @@ func file_internal_proto_properties_proto_init() {
 	if File_internal_proto_properties_proto != nil {
 		return
 	}
+	file_internal_proto_properties_proto_msgTypes[1].OneofWrappers = []any{
+		(*PropertyValue_NullValue)(nil),
+		(*PropertyValue_BoolValue)(nil),
+		(*PropertyValue_IntValue)(nil),
+		(*PropertyValue_UintValue)(nil),
+		(*PropertyValue_DoubleValue)(nil),
+		(*PropertyValue_StringValue)(nil),
+		(*PropertyValue_BytesValue)(nil),
+		(*PropertyValue_ListValue)(nil),
+		(*PropertyValue_MapValue)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_proto_properties_proto_rawDesc), len(file_internal_proto_properties_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   2,
+			NumEnums:      1,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_internal_proto_properties_proto_goTypes,
 		DependencyIndexes: file_internal_proto_properties_proto_depIdxs,
+		EnumInfos:         file_internal_proto_properties_proto_enumTypes,
 		MessageInfos:      file_internal_proto_properties_proto_msgTypes,
 	}.Build()
 	File_internal_proto_properties_proto = out.File

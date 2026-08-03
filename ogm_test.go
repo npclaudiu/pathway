@@ -28,7 +28,7 @@ func TestTx_Load(t *testing.T) {
 		}
 		return tx.SetProperties(id, map[string]interface{}{
 			"name": "Alice",
-			"age":  30, // Passed as int, stored as int (or float via protobuf if internally converted, usually float64)
+			"age":  30,
 		})
 	}); err != nil {
 		t.Fatal(err)

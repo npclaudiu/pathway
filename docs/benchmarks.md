@@ -18,7 +18,13 @@ Run focused suites:
 go test ./benchmarks -run '^$' -bench 'Benchmark(GetNode|ScanNodes|FindNodes)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(TraverseOut|TraverseOutHighDegree|TraverseOutByLabelHighDegree|BFS_2Hop)$' -benchmem -count 5
 go test ./benchmarks -run '^$' -bench 'Benchmark(InsertNode|BatchInsertNode_100|InsertEdge|BulkInsertEdge_100|InsertEdgeLargeEndpointLabels)$' -benchmem -count 5
+go test ./internal/properties -run '^$' -bench 'Benchmark(Marshal|Unmarshal)Properties$' -benchmem -count 5
 ```
+
+The property-codec benchmarks use a representative typed map containing signed
+and unsigned integers, a float, string, boolean, bytes, a list, and a nested
+map. Both marshal and unmarshal benchmarks call `ReportAllocs`, making the
+codec's time, bytes, and allocations directly comparable across revisions.
 
 `BenchmarkScanNodes` measures a full node scan. `BenchmarkFindNodes` separately
 measures an exact unique hit, a miss, an adversarial shared-prefix miss, and a

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -649,7 +650,17 @@ func TestTx_FindNodes_UsesExactTypedValues(t *testing.T) {
 	defer closeTestResource(t, db)
 	ctx := context.Background()
 
-	values := []interface{}{"a", "ab", "1", 1, true}
+	values := []interface{}{
+		"a",
+		"ab",
+		"1",
+		1,
+		float64(1),
+		int64(1 << 53),
+		int64(1<<53 + 1),
+		uint64(math.MaxUint64),
+		true,
+	}
 	ids := make([]uuid.UUID, len(values))
 	if err := db.Update(ctx, func(tx *Tx) error {
 		for i, value := range values {

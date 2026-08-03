@@ -291,6 +291,29 @@ func TestEncodeIndexPrefix_TypedAndDelimited(t *testing.T) {
 	if bytes.Equal(stringOne, numberOne) {
 		t.Fatal("string and numeric values collided")
 	}
+	unsignedOne, err := EncodeIndexPrefix("Node", "value", uint64(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	floatOne, err := EncodeIndexPrefix("Node", "value", float64(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(numberOne, unsignedOne) || bytes.Equal(numberOne, floatOne) || bytes.Equal(unsignedOne, floatOne) {
+		t.Fatal("signed, unsigned, and floating-point values collided")
+	}
+
+	largeInteger, err := EncodeIndexPrefix("Node", "value", int64(1<<53))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adjacentInteger, err := EncodeIndexPrefix("Node", "value", int64(1<<53+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(largeInteger, adjacentInteger) {
+		t.Fatal("adjacent integers above float64 precision collided")
+	}
 
 	short, err := EncodeIndexPrefix("Node", "value", "a")
 	if err != nil {

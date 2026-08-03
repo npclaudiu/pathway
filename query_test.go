@@ -449,7 +449,7 @@ func TestQuery_Values(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []interface{}{"Alice", float64(30), true}
+	want := []interface{}{"Alice", int64(30), true}
 	if !reflect.DeepEqual(res, want) {
 		t.Fatalf("multi-key mixed projection = %#v, want %#v", res, want)
 	}

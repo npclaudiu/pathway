@@ -74,7 +74,7 @@ func TestBulkUpdateWritesGraphAtomically(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if props["rank"] != float64(i) {
+			if props["rank"] != int64(i) {
 				t.Fatalf("edge %d rank = %v, want %d", i, props["rank"], i)
 			}
 		}

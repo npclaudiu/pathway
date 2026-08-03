@@ -186,7 +186,9 @@ func numericToBytes(val interface{}) []byte {
 const (
 	indexValueNil byte = iota
 	indexValueBool
-	indexValueNumber
+	indexValueSignedInteger
+	indexValueUnsignedInteger
+	indexValueFloat
 	indexValueString
 	indexValueBytes
 	indexValueList
@@ -316,29 +318,29 @@ func encodeIndexValue(value interface{}) (byte, []byte, error) {
 	case []byte:
 		return indexValueBytes, append([]byte(nil), v...), nil
 	case int:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexSignedInteger(int64(v))
 	case int8:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexSignedInteger(int64(v))
 	case int16:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexSignedInteger(int64(v))
 	case int32:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexSignedInteger(int64(v))
 	case int64:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexSignedInteger(v)
 	case uint:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexUnsignedInteger(uint64(v))
 	case uint8:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexUnsignedInteger(uint64(v))
 	case uint16:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexUnsignedInteger(uint64(v))
 	case uint32:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexUnsignedInteger(uint64(v))
 	case uint64:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexUnsignedInteger(v)
 	case float32:
-		return encodeIndexNumber(float64(v))
+		return encodeIndexFloat(float64(v))
 	case float64:
-		return encodeIndexNumber(v)
+		return encodeIndexFloat(v)
 	case []interface{}:
 		return encodeIndexJSON(indexValueList, v)
 	case map[string]interface{}:
@@ -348,13 +350,25 @@ func encodeIndexValue(value interface{}) (byte, []byte, error) {
 	}
 }
 
-func encodeIndexNumber(value float64) (byte, []byte, error) {
+func encodeIndexSignedInteger(value int64) (byte, []byte, error) {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(value))
+	return indexValueSignedInteger, b, nil
+}
+
+func encodeIndexUnsignedInteger(value uint64) (byte, []byte, error) {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, value)
+	return indexValueUnsignedInteger, b, nil
+}
+
+func encodeIndexFloat(value float64) (byte, []byte, error) {
 	if value == 0 {
 		value = 0 // Canonicalize negative zero.
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, math.Float64bits(value))
-	return indexValueNumber, b, nil
+	return indexValueFloat, b, nil
 }
 
 func encodeIndexJSON(valueType byte, value interface{}) (byte, []byte, error) {

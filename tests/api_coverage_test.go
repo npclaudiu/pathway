@@ -296,7 +296,7 @@ func TestAPICoverage(t *testing.T) {
 				t.Errorf("Prop mismatch usage")
 			}
 			// JSON unmarshal for numbers makes them float64 usually
-			if age, ok := p["age"].(float64); !ok || age != 30 {
+			if age, ok := p["age"].(int64); !ok || age != 30 {
 				t.Errorf("Prop mismatch age: got %v (%T)", p["age"], p["age"])
 			}
 			return nil

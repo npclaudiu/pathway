@@ -52,7 +52,7 @@ unindexed label/property pair.
 stable storage. For replayable bulk imports, `DurabilityNoSync` can reduce
 commit latency, but a process or machine crash may lose recent updates that
 already returned successfully. It does not change transaction atomicity, and
-it does not relax schema or index-definition migrations.
+it does not relax schema-marker or index-definition writes.
 
 ## 2. Data Model
 

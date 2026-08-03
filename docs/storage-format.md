@@ -1,35 +1,25 @@
 # Pathway Storage Format
 
 Pathway stores graph records in Pebble using byte-ordered key prefixes. This
-document describes Pathway schema version 3. It is a compatibility contract for
-opening existing databases, not a replacement for the public Go API.
+document describes Pathway schema version 4. Pathway has not yet made a stable
+format compatibility promise; this document records the current development
+format and is not a replacement for the public Go API.
 
 All integer length fields are unsigned big-endian values. UUID fields contain
 the UUID's 16 raw bytes. Labels and property names used in node indexes have a
 maximum encoded length of 65,535 bytes. Labels are intended to be UTF-8, but
-schema v3 does not validate their encoding.
+schema v4 does not validate their encoding.
 
-## Schema marker and migration
+## Schema marker and compatibility
 
 The key `0x00 || "pathway/schema-version"` stores a four-byte, big-endian
-Pathway schema version. The current value is `3`.
+Pathway schema version. The current value is `4`.
 
-When an unversioned database is opened, Pathway treats it as schema version 1
-and atomically migrates it to version 3. The migration rewrites adjacency keys,
-creates edge-ID reverse records, rebuilds property indexes, persists their
-definitions, and writes the version marker in one synced Pebble batch.
-
-Opening schema version 2 atomically creates a persisted definition for every
-label/property pair present on an existing node, retaining the corresponding
-typed index entries. This preserves indexes that can be inferred from existing
-data; applications should pass an explicit desired definition set when they
-need indexes for properties not yet present. An interruption leaves either the
-complete old schema or the complete new schema, so reopening is safe. A
-malformed or unsupported schema marker returns `ErrUnsupportedSchema`.
-
-Databases originally written with Pebble v1 must first have their Pebble format
-upgraded as described in the project README. Back up an on-disk database before
-either upgrade.
+Schema v4 replaces the development property and index value formats directly.
+Unversioned stores and stores marked with earlier or later schema versions are
+rejected with `ErrUnsupportedSchema` and must be recreated. An empty database
+receives the version marker with a synced write before index definitions are
+reconciled.
 
 ## Record prefixes
 
@@ -38,7 +28,7 @@ either upgrade.
 | `0x01` | Node | `node-ID` | `label-length:u16 \| label` |
 | `0x02` | Outgoing adjacency | `source-ID \| label-length:u16 \| label \| target-ID \| edge-ID` | `edge-ID` |
 | `0x03` | Incoming adjacency | `target-ID \| label-length:u16 \| label \| source-ID \| edge-ID` | `edge-ID` |
-| `0x04` | Properties | `entity-ID` | Protobuf-encoded property map |
+| `0x04` | Properties | `entity-ID` | Typed Protobuf property map; see below |
 | `0x05` | Node property index | See below | Empty |
 | `0x06` | Edge-ID reverse index | `edge-ID` | `source-ID \| target-ID \| label-length:u16 \| label` |
 | `0x07` | Property-index definition | `label-length:u16 \| label \| property-length:u16 \| property` | Empty |
@@ -53,6 +43,31 @@ then edge UUID. Because the encoded label begins with its `u16` byte length,
 label order is byte length first and label bytes second. An exact label prefix
 therefore forms one contiguous Pebble range; multi-label reads consume those
 disjoint ranges in encoded-prefix order.
+
+## Property values
+
+A property record is a Protobuf `Properties` message containing
+`map<string, PropertyValue>`. Each `PropertyValue` has exactly one `oneof`
+variant:
+
+| Field | Protobuf representation | Go value returned by `GetProperties` |
+|---:|---|---|
+| `1` | Null enum | `nil` |
+| `2` | `bool` | `bool` |
+| `3` | `sint64` | `int64` |
+| `4` | `uint64` | `uint64` |
+| `5` | `double` | `float64` |
+| `6` | `string` | `string` |
+| `7` | `bytes` | owned `[]byte` |
+| `8` | repeated typed values | `[]any` |
+| `9` | map of typed values | `map[string]any` |
+
+All signed Go integer inputs are canonicalized to `int64`, all unsigned inputs
+to `uint64`, and `float32` to `float64`. Integer conversion never passes through
+`float64`, so the full signed and unsigned 64-bit ranges remain exact. Bytes
+remain bytes rather than becoming base64 strings. Lists and maps recursively
+use the same variants, with nesting limited to 100 levels. A missing `oneof`
+variant or malformed Protobuf data is an error.
 
 ## Property indexes
 
@@ -71,15 +86,18 @@ The value type tags are:
 |---:|---|
 | `0` | Null |
 | `1` | Boolean |
-| `2` | Number, canonicalized to an IEEE-754 `float64` bit pattern |
-| `3` | String |
-| `4` | Bytes (supported by the encoder; normal properties canonicalize bytes to base64 strings) |
-| `5` | JSON list |
-| `6` | JSON object |
+| `2` | Signed integer, exact 8-byte representation |
+| `3` | Unsigned integer, exact 8-byte representation |
+| `4` | Float, canonicalized to an IEEE-754 `float64` bit pattern |
+| `5` | String |
+| `6` | Bytes |
+| `7` | JSON list |
+| `8` | JSON object |
 
-Type and length fields prevent collisions such as string `"1"` versus number
-`1`, or exact value `"a"` versus `"ab"`. The current index supports equality
-lookups only; its numeric representation does not define range-query ordering.
+Type and length fields prevent collisions such as string `"1"` versus integer
+`1`, signed `1` versus unsigned `1` or floating-point `1`, and exact value
+`"a"` versus `"ab"`. The current index supports equality lookups only; its
+numeric representations do not define range-query ordering.
 
 Changing a node label removes and creates that node's entries according to the
 old and new labels' configured definitions in the same transaction. Deleting a

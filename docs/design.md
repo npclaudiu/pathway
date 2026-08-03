@@ -66,7 +66,7 @@ The main source files have intentionally coarse responsibilities:
 | `bulk.go` | Atomic ingestion writer, sticky errors, and endpoint-validation cache |
 | `indexes.go` | Persisted index-definition reconciliation, rebuilds, and runtime lookup cache |
 | `tx.go` | Transaction abstraction, graph mutation algorithms, point reads, scan construction |
-| `schema.go` | Pathway schema marker, initialization, and supported migrations to v3 |
+| `schema.go` | Pathway schema marker, initialization, and development-format rejection |
 | `internal/encoding` | Key prefixes, adjacency/reverse records, typed index encoding |
 | `internal/properties` | Protobuf conversion for dynamic property maps |
 | `internal/proto` | Generated property message; never edit generated Go manually |
@@ -107,7 +107,7 @@ The edge UUID appears in both adjacency keys, so repeated insertion of the same
 may return the same neighboring node more than once, once for each edge.
 
 The three records are one logical edge. Code that adds another edge-derived
-record must update `PutEdge`, `DeleteEdge`, `DeleteNode`, migrations, and
+record must update `PutEdge`, `DeleteEdge`, `DeleteNode`, format handling, and
 corruption tests together.
 
 ### Entity UUID namespace
@@ -141,7 +141,7 @@ definitions occupy separate contiguous ranges. Prefix scans use a lower bound
 equal to the desired prefix and `keyUpperBound(prefix)` as an exclusive upper
 bound.
 
-The exact schema-v3 layouts and type tags are documented in
+The exact schema-v4 layouts and type tags are documented in
 [storage-format.md](storage-format.md). Important architectural consequences
 are:
 
@@ -160,20 +160,20 @@ are:
 
 ### Property serialization and canonicalization
 
-`internal/properties` stores a protobuf message whose map values are
-`google.protobuf.Value`. This deliberately limits values to JSON-like dynamic
-types and has several consequences:
+`internal/properties` stores a protobuf message whose map values use a generated
+`oneof`. The variants directly represent null, booleans, signed integers,
+unsigned integers, doubles, strings, bytes, lists, and maps without constructing
+`structpb` wrappers:
 
-- All Go integer and floating-point inputs become protobuf numbers and decode
-  as `float64`.
-- Integers beyond the exact `float64` range may lose precision.
-- `[]byte` is converted by `structpb` to a base64 string and decodes as a
-  string. Although the index encoder defines a bytes tag, normal persisted
-  properties do not retain a distinct byte-slice type.
-- Lists decode as `[]any`; objects decode as `map[string]any`.
-- Unsupported Go values fail before the batch commits.
-- Non-finite floating-point values should be avoided. `structpb` represents
-  them specially when converted back to Go and can change their apparent type.
+- Signed Go integer inputs decode as `int64`; unsigned inputs decode as
+  `uint64`; neither passes through `float64`.
+- `float32` inputs canonicalize to `float64`. Non-finite values retain their
+  IEEE-754 meaning.
+- `[]byte` remains a distinct, owned byte slice.
+- Lists decode as `[]any`; maps decode as `map[string]any`, recursively using
+  the same typed variants.
+- Unsupported values and nesting beyond 100 levels fail before commit.
+- Missing variants and malformed protobuf data fail decoding.
 
 `SetProperties` intentionally marshals and immediately unmarshals the new map
 before building indexes. Indexes are therefore based on the same canonical
@@ -190,8 +190,9 @@ label | property name | value type | value length | value | node UUID
 ```
 
 Length delimiters prevent a lookup for `"a"` from matching `"ab"`; a type tag
-prevents string `"1"` from colliding with number `1`. Numeric scalar inputs are
-canonicalized to `float64`, and negative zero is normalized to positive zero.
+prevents string `"1"` from colliding with integer `1`. Signed integers,
+unsigned integers, and floats have separate tags; 64-bit integers use their
+exact bits, while negative floating-point zero is normalized to positive zero.
 Lists and objects are JSON-encoded after property canonicalization.
 
 `FindNodes` constructs the complete prefix preceding the node UUID and scans
@@ -201,7 +202,7 @@ encoded for numeric sort order. Encoding failures are returned through the
 error.
 
 Definitions use their own key family and are loaded into an immutable, nested
-map on `Database` after schema migration and option reconciliation. Transactions
+map on `Database` after schema validation and option reconciliation. Transactions
 use that cache instead of reading definition records on every mutation.
 
 Indexes are denormalized state. Their correctness depends on all node mutation
@@ -214,10 +215,8 @@ paths:
 - `DeleteNode` removes configured entries before deleting the node.
 - Index reconciliation clears and rebuilds each newly configured range from
   canonical node properties, or deletes the range for a removed definition.
-- Schema migration rebuilds legacy indexes or materializes definitions for
-  existing typed indexes, depending on the source version.
 
-### Schema versioning and migration
+### Schema versioning
 
 `OpenWithOptions` opens Pebble, calls `ensureSchema`, reconciles persisted index
 definitions with `Options.Indexes`, and only then returns a `Database`.
@@ -225,33 +224,17 @@ definitions with `Options.Indexes`, and only then returns a `Database`.
 - An empty store receives the current four-byte schema marker with a synced
   write.
 - A store with the current marker opens normally.
-- Schema v2 is migrated to v3; a malformed or otherwise unsupported marker
-  returns `ErrUnsupportedSchema`.
-- Any non-empty store with no marker is treated as the original unversioned
-  schema (v1) and migrated directly to schema v3.
+- A malformed marker, an unsupported version, or a non-empty unversioned store
+  returns `ErrUnsupportedSchema` with guidance to recreate the pre-release
+  store.
 
-The v1-to-v3 migration treats legacy outgoing adjacency records as the source
-of truth. It deletes both legacy adjacency ranges, recreates outgoing and
-incoming records with edge IDs in their keys, creates reverse records, deletes
-all legacy property indexes, and rebuilds indexes from nodes and their property
-records. It also records a definition for every rebuilt label/property pair.
-The data changes and new marker are committed in one synced Pebble batch, so
-interruption before commit leaves v1 and interruption after commit leaves v3.
-
-The v2-to-v3 migration does not rewrite already typed index entries. It scans
-current nodes and persists a definition for each label/property pair it finds,
-preserving every index that can be inferred from current data. A caller can
-provide an authoritative desired `Options.Indexes` set on the same open; the
-subsequent reconciliation then adds or removes definitions atomically.
-
-This atomic approach is restart-safe but consumes batch memory proportional to
-the migrated graph. Large-database migration will eventually need a staged,
-checkpointed design. Orphan incoming records are intentionally not preserved;
-incoming adjacency is reconstructed from outgoing records.
+Schema v4 directly replaced the development property and property-index value
+formats. No compatibility clients exist, so older development stores are not
+migrated. This policy must be replaced by migrations and fixtures before the
+first persistent-format compatibility promise.
 
 Pathway schema versioning is independent of Pebble's format version. A database
-written by Pebble v1 must first undergo the Pebble upgrade described in the
-README.
+using an unsupported Pathway marker is rejected before record decoding.
 
 ## Database and transaction lifecycle
 
@@ -281,8 +264,8 @@ visible, but Pebble may retain recent WAL bytes in process memory, so a process
 or machine crash can lose updates whose callbacks already returned success.
 The resolved Pebble write option is validated once at open and cached on
 `Database`; invalid enum values return `ErrInvalidDurability`. Schema marker
-writes, migrations, and index-definition reconciliation deliberately continue
-to use `pebble.Sync` in both modes.
+writes and index-definition reconciliation deliberately continue to use
+`pebble.Sync` in both modes.
 
 `Database` is safe for concurrent use to the extent provided by Pebble. The
 atomic transaction counter assigns internal IDs, but those IDs and the optional
@@ -641,11 +624,11 @@ carrying the entire parent path.
 
 `Tx.Load` is a small reflection helper, not a full object-graph mapper. It loads
 properties into fields tagged `graph:"property"` on a non-nil struct pointer.
-It supports assignable values and one special conversion from `float64` to
-`int`; unsupported fields are silently left unchanged. Missing properties
-return `ErrNodeNotFound` even if the requested UUID was intended as an edge.
-Nil property values and more complex conversions need additional defensive
-handling before this API can be considered robust.
+It supports assignable values and checked conversions among numeric field
+types; unsupported or overflowing fields are silently left unchanged. Missing
+properties return `ErrNodeNotFound` even if the requested UUID was intended as
+an edge. Nil property values need additional defensive handling before this API
+can be considered robust.
 
 Predicate helpers are dynamically typed. `Gt` and `Lt` require matching `int`
 or `float64` types; they do not coerce between them. `Prefix` and `Contains`
@@ -673,8 +656,8 @@ Error conventions are not yet completely uniform:
 - `View` ignores snapshot-close errors, while `ToList` and `DeleteNode` join
   relevant close errors.
 
-Raw storage corruption normally aborts mutations that decode edge or migration
-records. Node decoding is less strict as noted above. Tests deliberately inject
+Raw storage corruption normally aborts mutations that decode edge records.
+Node decoding is less strict as noted above. Tests deliberately inject
 malformed adjacency and reverse records to verify rollback. New decoders should
 validate lengths before slicing or narrowing integer fields and should return
 stable errors instead of panicking.
@@ -711,7 +694,7 @@ Likely optimization directions must preserve invariants:
 
 - batching label reads when label-bearing nodes must be materialized;
 - context-aware collection and cancellation checks inside iterator loops;
-- a typed property codec that avoids protobuf/`structpb` hot-path conversions;
+- fewer property-codec allocations and redundant canonicalization work;
 - queue-head indexes and visited policies for repeat traversal.
 
 ## Safe extension playbooks
@@ -774,7 +757,7 @@ relaxed modes must not silently apply to schema or index-catalog changes.
 ## Tests, generated files, and maintenance workflow
 
 The repository separates root-package unit tests, `internal` codec/encoding
-tests, black-box integration tests under `tests`, schema migration tests, and
+tests, black-box integration tests under `tests`, schema-format tests, and
 benchmarks.
 
 Useful commands are:
