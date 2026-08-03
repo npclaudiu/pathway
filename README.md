@@ -185,6 +185,10 @@ err := g.V().HasLabel("Person").Each(ctx, func(result interface{}) error {
 the callback returns an error. In every case, it closes the traversal iterators
 and read transaction before returning.
 
+Use `ToListContext(ctx)` when results should still be collected but planning,
+reads, scans, repeats, and collection must stop if the caller cancels. Plain
+`ToList()` remains available and uses `context.Background()`.
+
 ## Documentation
 
 For a practical guide on data modeling and graph queries, refer to the [Social

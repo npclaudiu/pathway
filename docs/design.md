@@ -326,6 +326,9 @@ The deferred snapshot-close error is currently ignored.
 the caller must call `Close`. `Tx.Close` is idempotent for read transactions and
 sets an internal closed flag so later iterator construction returns
 `pebble.ErrClosed` rather than entering Pebble's closed-snapshot panic path.
+The transaction retains its caller context. Point reads check it before and
+after storage access, and low-level iterators check it before every seek and
+advance, reporting cancellation through `Iterator.Error`.
 
 `Snapshot` is a separate low-level raw-key wrapper. Its `Get` copies Pebble's
 borrowed value and translates Pebble not-found into `ErrKeyNotFound`. Its
@@ -541,8 +544,9 @@ pipeline type compatibility is enforced dynamically at iteration time.
 Returning an error from the callback terminates the traversal and still runs
 all cleanup. `Each` checks cancellation before building each step and before
 and after iterator advancement, returning the context error promptly between
-results. `ToList` is a convenience terminal over the same executor using
-`context.Background`; it appends each streamed value to a result slice.
+results. `ToListContext` uses the same executor and appends each streamed value
+to a result slice. `ToList` delegates to it with `context.Background` for
+backwards compatibility.
 
 Terminal results depend on the final iterator:
 
@@ -561,10 +565,13 @@ Struct values and copied fallback keys remain valid after the snapshot and
 Pebble iterators close. `Each` retains no result collection, so its memory use
 does not grow with result cardinality.
 
-`ToList` still has no context-accepting variant. Cancellation checks also occur
-at terminal boundaries rather than inside every iterator's internal scan or
-repeat loop. Hook panics are not recovered. The configured `Logger` is
-currently unused.
+Cancellation is checked during step planning, before and after terminal
+advancement, around point reads, on every Pebble iterator seek and advance, and
+inside repeat and value-projection loops. Iterator and transaction cleanup does
+not consult the cancelled context, so resources still close. User hooks,
+predicates, and result callbacks execute synchronously and must return before
+cancellation can make progress; their panics are not recovered. The configured
+`Logger` is currently unused.
 
 ### ID and property projection
 
@@ -693,7 +700,7 @@ interpreting results.
 Likely optimization directions must preserve invariants:
 
 - batching label reads when label-bearing nodes must be materialized;
-- context-aware collection and cancellation checks inside iterator loops;
+- lower cancellation latency for caller code that blocks inside hooks or predicates;
 - fewer property-codec allocations and redundant canonicalization work;
 - queue-head indexes and visited policies for repeat traversal.
 
@@ -789,7 +796,7 @@ design issues are:
 
 - label-bearing and property projections still perform per-result point reads;
 - mutable, dynamically typed pipelines and dynamically typed projections;
-- no context-aware collection or cancellation inside every iterator loop;
+- synchronous user hooks and predicates can delay cancellation until they return;
 - incomplete repeat validation, cycle policy, queue efficiency, and paths;
 - inconsistent iterator seek/valid and corruption semantics;
 - public exposure of Pebble types and mutable caller-owned Pebble options;

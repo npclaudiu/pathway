@@ -191,6 +191,9 @@ if err != nil {
 The callback receives the same result types as `ToList`. Returning an error
 stops the traversal early, and cancelling `ctx` returns `context.Canceled`.
 Pathway closes the iterator stack and read transaction on every exit path.
+When collection is convenient but cancellation is required, replace `ToList()`
+with `ToListContext(ctx)`; it returns the same result shapes and propagates the
+caller context to query hooks and storage reads.
 
 ### 4.2 Friends of Friends (2-Hop)
 

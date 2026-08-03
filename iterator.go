@@ -104,6 +104,11 @@ func (it *edgeIterator) Next() bool {
 	if it.err != nil {
 		return false
 	}
+	if err := it.iter.Error(); err != nil {
+		it.err = err
+		it.valid = false
+		return false
+	}
 
 	if it.first {
 		it.first = false
@@ -158,7 +163,7 @@ func (it *edgeIterator) Error() error {
 
 func (it *edgeIterator) Key() []byte            { return it.iter.Key() }
 func (it *edgeIterator) Value() []byte          { return it.iter.Value() }
-func (it *edgeIterator) Valid() bool            { return it.valid }
+func (it *edgeIterator) Valid() bool            { return it.valid && it.iter.Valid() }
 func (it *edgeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
 func (it *edgeIterator) Path() Path             { return it.iter.Path() }
 
@@ -180,6 +185,10 @@ func newMultiEdgeIterator(tx *Tx, prefixes [][]byte) *multiEdgeIterator {
 func (it *multiEdgeIterator) Next() bool {
 	it.valid = false
 	for it.err == nil {
+		if err := it.tx.contextErr(); err != nil {
+			it.err = err
+			return false
+		}
 		if it.current == nil {
 			if it.next >= len(it.prefixes) {
 				return false
@@ -237,7 +246,9 @@ func (it *multiEdgeIterator) Value() []byte {
 	}
 	return it.current.Value()
 }
-func (it *multiEdgeIterator) Valid() bool        { return it.valid }
+func (it *multiEdgeIterator) Valid() bool {
+	return it.valid && it.tx.contextErr() == nil && it.current != nil && it.current.Valid()
+}
 func (it *multiEdgeIterator) SeekGE([]byte) bool { return false }
 func (it *multiEdgeIterator) Path() Path {
 	if it.current == nil {
@@ -256,6 +267,11 @@ type nodeIterator struct {
 
 func (it *nodeIterator) Next() bool {
 	if it.err != nil {
+		return false
+	}
+	if err := it.iter.Error(); err != nil {
+		it.err = err
+		it.valid = false
 		return false
 	}
 	if it.first {
@@ -307,7 +323,7 @@ func (it *nodeIterator) Error() error {
 
 func (it *nodeIterator) Key() []byte            { return it.iter.Key() }
 func (it *nodeIterator) Value() []byte          { return it.iter.Value() }
-func (it *nodeIterator) Valid() bool            { return it.valid }
+func (it *nodeIterator) Valid() bool            { return it.valid && it.iter.Valid() }
 func (it *nodeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
 func (it *nodeIterator) Path() Path             { return it.iter.Path() }
 
@@ -321,6 +337,11 @@ type nodeIndexIterator struct {
 
 func (it *nodeIndexIterator) Next() bool {
 	if it.err != nil {
+		return false
+	}
+	if err := it.iter.Error(); err != nil {
+		it.err = err
+		it.valid = false
 		return false
 	}
 	if it.first {
@@ -406,7 +427,9 @@ func (it *nodeIndexIterator) Value() []byte {
 	return []byte(label)
 }
 
-func (it *nodeIndexIterator) Valid() bool            { return it.valid }
+func (it *nodeIndexIterator) Valid() bool {
+	return it.valid && it.iter != nil && it.iter.Valid()
+}
 func (it *nodeIndexIterator) SeekGE(key []byte) bool { return false } // Seek on index iterator implies index seek, which means prefix needs to change.
 func (it *nodeIndexIterator) Path() Path {
 	if !it.valid {
@@ -529,7 +552,7 @@ func (it *flatMapEdgeIterator) Next() bool {
 		if it.curIter.Next() {
 			return true
 		}
-		if err := it.curIter.Close(); err != nil {
+		if err := errors.Join(it.curIter.Error(), it.curIter.Close()); err != nil {
 			it.err = err
 			return false
 		}
@@ -703,6 +726,10 @@ func newValueIterator(tx *Tx, prev Iterator, keys []string) *valueIterator {
 func (it *valueIterator) Next() bool {
 	it.valid = false
 	for {
+		if err := it.tx.contextErr(); err != nil {
+			it.err = err
+			return false
+		}
 		if len(it.pending) > 0 {
 			it.current = it.pending[0]
 			it.pending = it.pending[1:]
@@ -835,23 +862,41 @@ func newRepeatIterator(tx *Tx, prev Iterator, conf *RepeatConfig) *repeatIterato
 }
 
 func (it *repeatIterator) Next() bool {
+	if it.contextCanceled() {
+		return false
+	}
 	if !it.inited {
 		// Drain prev into queue
 		for it.prev.Next() {
+			if it.contextCanceled() {
+				return false
+			}
 			var id uuid.UUID
 			var lbl string
 			if ni, ok := it.prev.(NodeIterator); ok {
-				id, lbl, _ = ni.Node()
+				var err error
+				id, lbl, err = ni.Node()
+				if err != nil {
+					it.err = err
+					return false
+				}
 			}
 			it.queue = append(it.queue, traverser{
 				id: id, label: lbl, path: it.prev.Path(), depth: 0,
 			})
+		}
+		if err := it.prev.Error(); err != nil {
+			it.err = err
+			return false
 		}
 		it.inited = true
 	}
 
 	// BFS Loop
 	for len(it.queue) > 0 {
+		if it.contextCanceled() {
+			return false
+		}
 		cur := it.queue[0]
 		it.queue = it.queue[1:]
 
@@ -887,24 +932,43 @@ func (it *repeatIterator) Next() bool {
 		}}
 		outTP := it.conf.sub(tempTP)
 
-		var iter Iterator = nil
+		var iter Iterator
 		for _, step := range outTP.steps {
-			iter = step(it.tx, iter)
-			if iter == nil {
-				break
+			if it.contextCanceled() {
+				if iter != nil {
+					it.err = errors.Join(it.err, iter.Close())
+				}
+				return false
 			}
+			next := step(it.tx, iter)
+			if next == nil {
+				it.err = errors.New("repeat pipeline step returned nil iterator")
+				if iter != nil {
+					it.err = errors.Join(it.err, iter.Close())
+				}
+				return false
+			}
+			iter = next
 		}
 
 		if iter != nil {
 			for iter.Next() {
+				if it.contextCanceled() {
+					it.err = errors.Join(it.err, iter.Close())
+					return false
+				}
 				if ni, ok := iter.(NodeIterator); ok {
-					nid, nlbl, _ := ni.Node()
+					nid, nlbl, err := ni.Node()
+					if err != nil {
+						it.err = errors.Join(err, iter.Close())
+						return false
+					}
 					it.queue = append(it.queue, traverser{
 						id: nid, label: nlbl, path: iter.Path(), depth: cur.depth + 1,
 					})
 				}
 			}
-			if err := iter.Close(); err != nil {
+			if err := errors.Join(iter.Error(), iter.Close()); err != nil {
 				it.err = err
 				return false
 			}
@@ -916,6 +980,17 @@ func (it *repeatIterator) Next() bool {
 		}
 	}
 
+	return false
+}
+
+func (it *repeatIterator) contextCanceled() bool {
+	if it.err != nil {
+		return true
+	}
+	if err := it.tx.contextErr(); err != nil {
+		it.err = err
+		return true
+	}
 	return false
 }
 

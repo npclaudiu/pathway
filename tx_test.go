@@ -34,6 +34,41 @@ func TestTx_PutNode_InvalidLabel(t *testing.T) {
 	}
 }
 
+func TestTx_ReadsObserveTransactionContextCancellation(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	id := uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		return tx.PutNode(id, "Node")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tx, err := db.NewReadTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, tx)
+	iter := tx.ScanNodes()
+	defer closeTestResource(t, iter)
+	cancel()
+
+	if _, _, err := tx.GetNode(id); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetNode error = %v, want context.Canceled", err)
+	}
+	if iter.Next() {
+		t.Fatal("cancelled scan returned a node")
+	}
+	if !errors.Is(iter.Error(), context.Canceled) {
+		t.Fatalf("scan error = %v, want context.Canceled", iter.Error())
+	}
+}
+
 func TestTx_PutEdge_Dangling(t *testing.T) {
 	db, _ := Open(":memory:")
 	defer closeTestResource(t, db)

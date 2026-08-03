@@ -27,6 +27,38 @@ type Tx struct {
 // pebbleIterator implements the Iterator interface for pebble.Iterator.
 type pebbleIterator struct {
 	*pebble.Iterator
+	ctx context.Context
+	err error
+}
+
+func (p *pebbleIterator) Next() bool {
+	if p.contextCanceled() {
+		return false
+	}
+	return p.Iterator.Next()
+}
+
+func (p *pebbleIterator) SeekGE(key []byte) bool {
+	if p.contextCanceled() {
+		return false
+	}
+	return p.Iterator.SeekGE(key)
+}
+
+func (p *pebbleIterator) Valid() bool {
+	return !p.contextCanceled() && p.Iterator.Valid()
+}
+
+func (p *pebbleIterator) Error() error {
+	p.contextCanceled()
+	return errors.Join(p.err, p.Iterator.Error())
+}
+
+func (p *pebbleIterator) contextCanceled() bool {
+	if p.err == nil && p.ctx != nil {
+		p.err = p.ctx.Err()
+	}
+	return p.err != nil
 }
 
 func (p *pebbleIterator) Key() []byte {
@@ -48,6 +80,9 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error) {
 	if tx.closed {
 		return nil, pebble.ErrClosed
 	}
+	if err := tx.contextErr(); err != nil {
+		return nil, err
+	}
 	var iter *pebble.Iterator
 	var err error
 
@@ -59,37 +94,47 @@ func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pebbleIterator{iter}, nil
+	if err := tx.contextErr(); err != nil {
+		return nil, errors.Join(err, iter.Close())
+	}
+	return &pebbleIterator{Iterator: iter, ctx: tx.ctx}, nil
 }
 
 // Get retrieves the raw value for a given key.
 // It handles the difference between read-only readers and write batches.
 func (tx *Tx) Get(key []byte) ([]byte, error) {
-	if tx.readOnly {
-		val, closer, err := tx.reader.Get(key)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = closer.Close() }()
-		// We must copy the value because closer.Close() invalidates it
-		// Pebble docs say: "The caller must close the returned Closer when finished with the result."
-		// We return []byte which might be used after this function returns.
-		// So we strictly need to copy.
-		result := make([]byte, len(val))
-		copy(result, val)
-		return result, nil
+	if err := tx.contextErr(); err != nil {
+		return nil, err
 	}
-	// Batch.Get returns ([]byte, io.Closer, error) too?
-	// Let's check Pebble API. batch.Get(key) returns ([]byte, io.Closer, error).
-	// Yes.
-	val, closer, err := tx.batch.Get(key)
+	reader := tx.reader
+	if !tx.readOnly {
+		reader = tx.batch
+	}
+	val, closer, err := reader.Get(key)
 	if err != nil {
+		if contextErr := tx.contextErr(); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, err
 	}
 	defer func() { _ = closer.Close() }()
-	result := make([]byte, len(val))
-	copy(result, val)
+	if err := tx.contextErr(); err != nil {
+		return nil, err
+	}
+	// Pebble invalidates val when closer closes, so callers receive an owned
+	// copy that remains valid after this read finishes.
+	result := append([]byte(nil), val...)
+	if err := tx.contextErr(); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+func (tx *Tx) contextErr() error {
+	if tx.ctx == nil {
+		return nil
+	}
+	return tx.ctx.Err()
 }
 
 // Set sets the raw value for a given key.
@@ -468,16 +513,28 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error {
 // Reading through the indexed batch preserves read-your-writes for nodes staged
 // earlier in the same update.
 func (tx *Tx) nodeExists(id uuid.UUID) (bool, error) {
+	if err := tx.contextErr(); err != nil {
+		return false, err
+	}
 	reader := tx.reader
 	if !tx.readOnly {
 		reader = tx.batch
 	}
 	_, closer, err := reader.Get(encoding.EncodeNodeKey(id))
+	if contextErr := tx.contextErr(); contextErr != nil {
+		if closer != nil {
+			contextErr = errors.Join(contextErr, closer.Close())
+		}
+		return false, contextErr
+	}
 	if errors.Is(err, pebble.ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
+	}
+	if err := tx.contextErr(); err != nil {
+		return false, errors.Join(err, closer.Close())
 	}
 	if err := closer.Close(); err != nil {
 		return false, err
@@ -513,7 +570,14 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	return properties.UnmarshalProperties(val)
+	props, err := properties.UnmarshalProperties(val)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.contextErr(); err != nil {
+		return nil, err
+	}
+	return props, nil
 }
 
 // OutEdges returns outgoing edges from id. When labels are provided, each

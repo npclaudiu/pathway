@@ -215,7 +215,16 @@ func (d *Database) View(ctx context.Context, fn func(tx *Tx) error) error {
 // The caller is responsible for calling Tx.Close() on the returned transaction.
 // Consider using View() instead which manages the transaction lifecycle automatically.
 func (d *Database) NewReadTx(ctx context.Context) (*Tx, error) {
+	if ctx == nil {
+		return nil, errors.New("pathway: nil read transaction context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	snapshot := d.db.NewSnapshot()
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, snapshot.Close())
+	}
 	tx := &Tx{
 		db:       d,
 		ctx:      ctx,

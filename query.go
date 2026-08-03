@@ -410,8 +410,15 @@ func (tp *TraversalPipeline) each(
 // projections retain their documented result types. To consume large results
 // with bounded memory, use Each.
 func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
+	return tp.ToListContext(context.Background())
+}
+
+// ToListContext executes the traversal pipeline with ctx and returns
+// materialized results. Cancellation stops planning, reads, scans, repeats,
+// and result collection, and is propagated to observability hooks.
+func (tp *TraversalPipeline) ToListContext(ctx context.Context) (results []interface{}, err error) {
 	resultCapacity := 16
-	err = tp.each(context.Background(), func(value interface{}) error {
+	err = tp.each(ctx, func(value interface{}) error {
 		if results == nil {
 			results = make([]interface{}, 0, resultCapacity)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,30 @@ import (
 type closeTrackingNodeIterator struct {
 	NodeIterator
 	closed bool
+}
+
+type gatedNodeIterator struct {
+	NodeIterator
+	started chan struct{}
+	proceed chan struct{}
+	once    sync.Once
+	closed  bool
+}
+
+func (it *gatedNodeIterator) Next() bool {
+	valid := it.NodeIterator.Next()
+	if valid {
+		it.once.Do(func() {
+			close(it.started)
+			<-it.proceed
+		})
+	}
+	return valid
+}
+
+func (it *gatedNodeIterator) Close() error {
+	it.closed = true
+	return it.NodeIterator.Close()
 }
 
 func (it *closeTrackingNodeIterator) Close() error {
@@ -190,6 +215,152 @@ func TestQuery_EachPropagatesCancellationAndContextToHooks(t *testing.T) {
 	}
 	if !errors.Is(endErr, context.Canceled) {
 		t.Fatalf("OnQueryEnd error = %v, want context.Canceled", endErr)
+	}
+}
+
+func TestQuery_ToListContextPropagatesCallerContextToHooks(t *testing.T) {
+	type contextKey struct{}
+	var startContext, endContext context.Context
+	var endErr error
+	db, err := OpenWithOptions(":memory:", Options{
+		OnQueryStart: func(ctx context.Context, _ string) {
+			startContext = ctx
+		},
+		OnQueryEnd: func(ctx context.Context, _ string, _ time.Duration, err error) {
+			endContext = ctx
+			endErr = err
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "to-list"))
+	cancel()
+	results, err := NewTraversalSource(db).V().ToListContext(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ToListContext error = %v, want context.Canceled", err)
+	}
+	if results != nil {
+		t.Fatalf("cancelled results = %#v, want nil", results)
+	}
+	if startContext != ctx || endContext != ctx {
+		t.Fatal("query hooks did not receive the ToListContext caller context")
+	}
+	if startContext.Value(contextKey{}) != "to-list" {
+		t.Fatal("query hook context lost caller values")
+	}
+	if !errors.Is(endErr, context.Canceled) {
+		t.Fatalf("OnQueryEnd error = %v, want context.Canceled", endErr)
+	}
+}
+
+func TestQuery_ToListContextCancelsNodeScanAndClosesIterator(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		return tx.PutNode(uuid.New(), "Present")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	var scan *gatedNodeIterator
+	pipeline := &TraversalPipeline{
+		db: db,
+		steps: []Step{func(tx *Tx, _ Iterator) Iterator {
+			scan = &gatedNodeIterator{
+				NodeIterator: tx.ScanNodes(),
+				started:      started,
+				proceed:      proceed,
+			}
+			return scan
+		}},
+	}
+	pipeline.HasLabel("Missing")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := pipeline.ToListContext(ctx)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("node scan did not start")
+	}
+	cancel()
+	close(proceed)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("scan error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled node scan did not stop promptly")
+	}
+	if scan == nil || !scan.closed {
+		t.Fatal("cancelled node scan did not close its iterator")
+	}
+}
+
+func TestQuery_ToListContextCancelsRepeat(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	id := uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		if err := tx.PutNode(id, "Node"); err != nil {
+			return err
+		}
+		_, err := tx.PutEdge(id, id, "LOOP")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	var once sync.Once
+	pipeline := NewTraversalSource(db).V(id.String()).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
+		return p.Out("LOOP")
+	}).Until(func(interface{}) bool {
+		once.Do(func() {
+			close(started)
+			<-proceed
+		})
+		return false
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := pipeline.ToListContext(ctx)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("repeat traversal did not start")
+	}
+	cancel()
+	close(proceed)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("repeat error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled repeat did not stop promptly")
 	}
 }
 
