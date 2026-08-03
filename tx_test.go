@@ -887,7 +887,7 @@ func TestKeyUpperBound(t *testing.T) {
 	}
 }
 
-func TestTx_Iterator_GenericMethods(t *testing.T) {
+func TestTx_NodeIteratorContract(t *testing.T) {
 	db, _ := Open(":memory:")
 	defer closeTestResource(t, db)
 	ctx := context.Background()
@@ -903,22 +903,21 @@ func TestTx_Iterator_GenericMethods(t *testing.T) {
 		it := tx.ScanNodes()
 		defer closeTestResource(t, it)
 
+		if _, _, err := it.Node(); !errors.Is(err, ErrInvalidIteratorState) {
+			t.Fatalf("Node before Next error = %v, want ErrInvalidIteratorState", err)
+		}
+		if !it.Next() {
+			t.Fatalf("Next returned false: %v", it.Error())
+		}
+		gotID, label, err := it.Node()
+		if err != nil || gotID != id || label != "A" {
+			t.Fatalf("Node = (%s, %q, %v), want (%s, A, nil)", gotID, label, err, id)
+		}
 		if it.Next() {
-			k := it.Key()
-			v := it.Value()
-			if len(k) == 0 || len(v) == 0 {
-				t.Error("Key/Value empty")
-			}
-			if !it.Valid() {
-				t.Error("expected Valid")
-			}
-			// SeekGE (scan usually supports it?)
-			// NodeIterator wraps Pebble iterator.
-			if !it.SeekGE(k) {
-				t.Error("SeekGE failed")
-			}
-			// Path
-			_ = it.Path()
+			t.Fatal("iterator returned an unexpected second node")
+		}
+		if _, _, err := it.Node(); !errors.Is(err, ErrInvalidIteratorState) {
+			t.Fatalf("Node after exhaustion error = %v, want ErrInvalidIteratorState", err)
 		}
 		if it.Error() != nil {
 			t.Error(it.Error())

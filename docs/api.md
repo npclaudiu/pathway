@@ -102,7 +102,6 @@ import "github.com/npclaudiu/pathway"
   - [func \(tx \*Tx\) GetProperties\(id uuid.UUID\) \(map\[string\]interface\{\}, error\)](<#Tx.GetProperties>)
   - [func \(tx \*Tx\) InEdges\(id uuid.UUID, labels ...string\) EdgeIterator](<#Tx.InEdges>)
   - [func \(tx \*Tx\) Load\(id uuid.UUID, dest interface\{\}\) error](<#Tx.Load>)
-  - [func \(tx \*Tx\) NewIterator\(opts \*pebble.IterOptions\) \(Iterator, error\)](<#Tx.NewIterator>)
   - [func \(tx \*Tx\) OutEdges\(id uuid.UUID, labels ...string\) EdgeIterator](<#Tx.OutEdges>)
   - [func \(tx \*Tx\) PutEdge\(srcID, dstID uuid.UUID, label string\) \(uuid.UUID, error\)](<#Tx.PutEdge>)
   - [func \(tx \*Tx\) PutNode\(id uuid.UUID, label string\) error](<#Tx.PutNode>)
@@ -128,21 +127,22 @@ const MaxExternalIDPartBytes = 65_535
 
 ```go
 var (
-    ErrInvalidDatabase    = errors.New("invalid database instance")
-    ErrInvalidSnapshot    = errors.New("invalid snapshot instance")
-    ErrKeyNotFound        = errors.New("key not found")
-    ErrNodeNotFound       = errors.New("node not found")
-    ErrEdgeNotFound       = errors.New("edge not found")
-    ErrEntityNotFound     = errors.New("node or edge not found")
-    ErrInvalidNodeID      = errors.New("invalid textual node ID")
-    ErrTraversalResult    = errors.New("unexpected traversal result type")
-    ErrInvalidRepeat      = errors.New("invalid repeat configuration")
-    ErrInvalidExternalID  = errors.New("invalid external ID")
-    ErrExternalIDConflict = errors.New("external ID is already bound to another node")
-    ErrExternalIDCorrupt  = errors.New("corrupt external ID records")
-    ErrDanglingEdge       = errors.New("cannot create edge: source or target node does not exist")
-    ErrUnsupportedSchema  = errors.New("unsupported pathway storage schema")
-    ErrInvalidDurability  = errors.New("invalid durability mode")
+    ErrInvalidDatabase      = errors.New("invalid database instance")
+    ErrInvalidSnapshot      = errors.New("invalid snapshot instance")
+    ErrKeyNotFound          = errors.New("key not found")
+    ErrNodeNotFound         = errors.New("node not found")
+    ErrEdgeNotFound         = errors.New("edge not found")
+    ErrEntityNotFound       = errors.New("node or edge not found")
+    ErrInvalidNodeID        = errors.New("invalid textual node ID")
+    ErrTraversalResult      = errors.New("unexpected traversal result type")
+    ErrInvalidRepeat        = errors.New("invalid repeat configuration")
+    ErrInvalidIteratorState = errors.New("iterator is not positioned on a result")
+    ErrInvalidExternalID    = errors.New("invalid external ID")
+    ErrExternalIDConflict   = errors.New("external ID is already bound to another node")
+    ErrExternalIDCorrupt    = errors.New("corrupt external ID records")
+    ErrDanglingEdge         = errors.New("cannot create edge: source or target node does not exist")
+    ErrUnsupportedSchema    = errors.New("unsupported pathway storage schema")
+    ErrInvalidDurability    = errors.New("invalid durability mode")
 )
 ```
 
@@ -360,13 +360,13 @@ type Edge struct {
 ```
 
 <a name="EdgeIterator"></a>
-## type [EdgeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L35-L41>)
+## type [EdgeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L33-L39>)
 
-EdgeIterator iterates over edges returning typed data.
+EdgeIterator iterates over typed edges. Edge is valid only after Next returns true and before Next is called again or the iterator is closed. Its UUIDs and string are caller\-owned values and remain valid after advancement or Close.
 
 ```go
 type EdgeIterator interface {
-    Iterator // Embed generic iterator
+    Iterator
     // Edge returns the edge ID, the node at the other end of the adjacency,
     // its label, and any decoding error. The other node is the target for an
     // outgoing iterator and the source for an incoming iterator.
@@ -445,29 +445,21 @@ type IndexDefinition struct {
 ```
 
 <a name="Iterator"></a>
-## type [Iterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L14-L32>)
+## type [Iterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L20-L28>)
 
-Iterator is the generic interface for iterating over key\-value pairs. It abstracts the underlying storage iterator. Users typically interact with specific interfaces like NodeIterator or EdgeIterator.
+Iterator is the common lifecycle contract for graph and traversal results.
+
+Call Next before reading each result. A true return positions the iterator on one result until the next call to Next. False means iteration has ended; callers must then check Error. Close releases iterator resources and must be called once on every iterator, including empty and failed iterators. Close ends the iterator lifetime; no methods may be called afterward. Iterators are not safe for concurrent use. An iterator returned by Tx must be closed before its transaction closes.
 
 ```go
 type Iterator interface {
-    // Next advances the iterator to the next element. Returns false if exhausted/error.
+    // Next advances to the next result. It returns false on exhaustion or error.
     Next() bool
-    // SeekGE moves to the first key greater than or equal to the given key.
-    SeekGE(key []byte) bool
-    // Key returns the current key.
-    Key() []byte
-    // Value returns the current value.
-    Value() []byte
-    // Valid returns true if the iterator is positioned at a valid element.
-    Valid() bool
-    // Close releases resources.
+    // Close releases all resources owned by the iterator.
     Close() error
-    // Error returns any accumulated error.
+    // Error reports construction or advancement errors. It is checked after
+    // Next returns false and does not report exhaustion as an error.
     Error() error
-
-    // Path returns the current path history for the element.
-    Path() Path
 }
 ```
 
@@ -500,11 +492,11 @@ type Node struct {
 <a name="NodeIterator"></a>
 ## type [NodeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L44-L48>)
 
-NodeIterator iterates over nodes returning typed data.
+NodeIterator iterates over typed nodes. Node is valid only after Next returns true and before Next is called again or the iterator is closed. Its UUID and string are caller\-owned values and remain valid after advancement or Close.
 
 ```go
 type NodeIterator interface {
-    Iterator // Embed generic iterator
+    Iterator
     // Node returns the ID and Label of the current node.
     Node() (uuid.UUID, string, error)
 }
@@ -1091,7 +1083,7 @@ type Tx struct {
 ```
 
 <a name="Tx.Access"></a>
-### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L161>)
+### func \(\*Tx\) [Access](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L157>)
 
 ```go
 func (tx *Tx) Access(fn func(tx *Tx) error) error
@@ -1109,7 +1101,7 @@ func (tx *Tx) BindExternalID(externalID ExternalID, nodeID uuid.UUID) error
 BindExternalID atomically binds externalID to an existing node. Repeating the same binding is idempotent. Binding an existing external ID to a different node returns ErrExternalIDConflict.
 
 <a name="Tx.Close"></a>
-### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L169>)
+### func \(\*Tx\) [Close](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L165>)
 
 ```go
 func (tx *Tx) Close() error
@@ -1118,7 +1110,7 @@ func (tx *Tx) Close() error
 Close closes the transaction. This releases the underlying snapshot. For write transactions \(Update\), it's a no\-op as the batch is managed by the DB.Update method, but for read\-only \(View/NewReadTx\), it releases the read lease.
 
 <a name="Tx.Delete"></a>
-### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L152>)
+### func \(\*Tx\) [Delete](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L148>)
 
 ```go
 func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
@@ -1127,7 +1119,7 @@ func (tx *Tx) Delete(key []byte, opts *pebble.WriteOptions) error
 Delete deletes the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.DeleteEdge"></a>
-### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L474>)
+### func \(\*Tx\) [DeleteEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L470>)
 
 ```go
 func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
@@ -1136,7 +1128,7 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error
 DeleteEdge removes a specific edge, including both adjacency records, its reverse\-index record, and its properties.
 
 <a name="Tx.DeleteNode"></a>
-### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L399>)
+### func \(\*Tx\) [DeleteNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L395>)
 
 ```go
 func (tx *Tx) DeleteNode(id uuid.UUID) error
@@ -1145,7 +1137,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error
 DeleteNode deletes a node and all its incident edges \(both outgoing and incoming\), including each edge's reverse\-index entry and properties. Its cost is linear in the node's degree.
 
 <a name="Tx.FindNodes"></a>
-### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L662>)
+### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L658>)
 
 ```go
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator
@@ -1154,7 +1146,7 @@ func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterat
 FindNodes performs an exact typed lookup in a node\-property index configured through Options.Indexes. An unindexed label/property pair returns no results. String, numeric, and boolean values are distinct; value prefixes do not match. The iterator reports an encoding error if label or propKey exceeds 65,535 bytes.
 
 <a name="Tx.Get"></a>
-### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L106>)
+### func \(\*Tx\) [Get](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L102>)
 
 ```go
 func (tx *Tx) Get(key []byte) ([]byte, error)
@@ -1163,7 +1155,7 @@ func (tx *Tx) Get(key []byte) ([]byte, error)
 Get retrieves the raw value for a given key. It handles the difference between read\-only readers and write batches.
 
 <a name="Tx.GetNode"></a>
-### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L552>)
+### func \(\*Tx\) [GetNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L548>)
 
 ```go
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
@@ -1172,7 +1164,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
 GetNode retrieves a node's label by its ID. Returns the label, a boolean indicating existence, and any error.
 
 <a name="Tx.GetProperties"></a>
-### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L569>)
+### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L565>)
 
 ```go
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
@@ -1181,7 +1173,7 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
 GetProperties retrieves the properties map for a given node or edge ID. Signed integers are returned as int64, unsigned integers as uint64, and floats as float64. Returns nil if no properties exist.
 
 <a name="Tx.InEdges"></a>
-### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L609>)
+### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L605>)
 
 ```go
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -1198,17 +1190,8 @@ func (tx *Tx) Load(id uuid.UUID, dest interface{}) error
 
 Load populates the destination struct with properties from the node/edge with the given ID. dest must be a pointer to a struct.
 
-<a name="Tx.NewIterator"></a>
-### func \(\*Tx\) [NewIterator](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L80>)
-
-```go
-func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error)
-```
-
-NewIterator creates a new low\-level iterator for the transaction. This is primarily for internal use; users should typically use high\-level iterators like ScanNodes, OutEdges, etc.
-
 <a name="Tx.OutEdges"></a>
-### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L597>)
+### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L593>)
 
 ```go
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -1225,7 +1208,7 @@ for iter.Next() { ... }
 ```
 
 <a name="Tx.PutEdge"></a>
-### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L252>)
+### func \(\*Tx\) [PutEdge](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L248>)
 
 ```go
 func (tx *Tx) PutEdge(srcID, dstID uuid.UUID, label string) (uuid.UUID, error)
@@ -1242,7 +1225,7 @@ edgeID, err := tx.PutEdge(srcID, dstID, "KNOWS")
 ```
 
 <a name="Tx.PutNode"></a>
-### func \(\*Tx\) [PutNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L187>)
+### func \(\*Tx\) [PutNode](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L183>)
 
 ```go
 func (tx *Tx) PutNode(id uuid.UUID, label string) error
@@ -1276,7 +1259,7 @@ func (tx *Tx) ResolveExternalID(externalID ExternalID) (uuid.UUID, bool, error)
 ResolveExternalID returns the internal UUID bound to externalID. The boolean is false when no binding exists. Dangling or inconsistent forward/reverse records return ErrExternalIDCorrupt.
 
 <a name="Tx.ScanNodes"></a>
-### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L683>)
+### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L679>)
 
 ```go
 func (tx *Tx) ScanNodes() NodeIterator
@@ -1285,7 +1268,7 @@ func (tx *Tx) ScanNodes() NodeIterator
 ScanNodes scans all nodes in the database. This is a full table scan and can be slow for large datasets.
 
 <a name="Tx.Set"></a>
-### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L143>)
+### func \(\*Tx\) [Set](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L139>)
 
 ```go
 func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
@@ -1294,7 +1277,7 @@ func (tx *Tx) Set(key, value []byte, opts *pebble.WriteOptions) error
 Set sets the raw value for a given key. Returns an error if the transaction is read\-only.
 
 <a name="Tx.SetProperties"></a>
-### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L322>)
+### func \(\*Tx\) [SetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L318>)
 
 ```go
 func (tx *Tx) SetProperties(id uuid.UUID, props map[string]interface{}) error

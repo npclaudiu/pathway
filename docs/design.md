@@ -362,25 +362,26 @@ the caller must call `Close`. `Tx.Close` is idempotent for read transactions and
 sets an internal closed flag so later iterator construction returns
 `pebble.ErrClosed` rather than entering Pebble's closed-snapshot panic path.
 The transaction retains its caller context. Point reads check it before and
-after storage access, and low-level iterators check it before every seek and
-advance, reporting cancellation through `Iterator.Error`.
+after storage access, and private storage cursors check it before every seek
+and advance. Typed graph iterators report cancellation through
+`Iterator.Error`.
 
 `Snapshot` is a separate low-level raw-key wrapper. Its `Get` copies Pebble's
 borrowed value and translates Pebble not-found into `ErrKeyNotFound`. Its
 context argument is unused, and its error conventions differ from `Tx.Get`.
 
-`Tx.Get` always copies values before closing Pebble's value closer. Iterator
-`Key` and `Value` methods, in contrast, expose Pebble's current borrowed slices;
-callers must copy them before advancing the iterator if they need to retain
-them.
+`Tx.Get` always copies values before closing Pebble's value closer. The private
+`rawIterator` cursor borrows its current key and value buffers from Pebble, so
+storage adapters decode or copy them before advancing. Public typed iterators
+never expose those buffers.
 
 ### Raw escape hatches
 
-`Tx.Get`, `Set`, `Delete`, `NewIterator`, and `Access`, plus `Snapshot.Get`,
-expose low-level storage behavior. Several signatures include Pebble types.
-These are useful for advanced access and tests but couple the public API to the
-storage engine. Raw writes can violate every graph invariant and should not be
-used for ordinary application data.
+`Tx.Get`, `Set`, `Delete`, and `Access`, plus `Snapshot.Get`, expose low-level
+storage behavior. Several signatures include Pebble types. These are useful
+for advanced access and tests but couple the public API to the storage engine.
+Raw writes can violate every graph invariant and should not be used for
+ordinary application data. Raw iterator construction is package-private.
 
 ## Mutation algorithms
 
@@ -455,8 +456,10 @@ Deleting a missing node currently succeeds rather than returning
 
 ### Public contract
 
-`Iterator` exposes cursor operations plus `Path`. `NodeIterator` and
-`EdgeIterator` add typed decoders. The intended consumption pattern is:
+`Iterator` has one lifecycle contract shared by every graph and traversal
+adapter: `Next` advances, `Error` reports construction or advancement failure,
+and `Close` releases resources. `NodeIterator` and `EdgeIterator` add typed
+access to the current result. The intended consumption pattern is:
 
 ```go
 iter := tx.OutEdges(id)
@@ -471,13 +474,30 @@ for iter.Next() {
 return iter.Error()
 ```
 
-High-level scan constructors seek the underlying Pebble iterator immediately.
-Their wrapper's `first` flag makes the first call to `Next` return that already
-positioned record; later calls advance Pebble.
+`Node` and `Edge` are valid only after `Next` returns true and before the next
+call to `Next`. Calling either outside that window returns
+`ErrInvalidIteratorState`, unless a construction or advancement error is
+already available. Returned UUIDs and strings are owned values that remain
+valid after advancement and `Close`. Every iterator must be closed once,
+including empty and failed iterators. `Close` ends the iterator lifetime, so no
+methods may be called afterward, and iterators are not safe for concurrent use.
+An iterator created by `Tx` must be closed before its owning transaction.
+
+High-level scan constructors position the private Pebble cursor immediately,
+but the typed wrapper does not expose a current result until the first public
+`Next`. Its `first` flag makes that call publish the already positioned record;
+later calls advance Pebble.
 
 Construction errors are represented by an inert `errorIterator`. Every method
-is safe, `Next` and `SeekGE` return false, and `Error` preserves the cause. This
-avoids nil-wrapper panics while retaining the existing API shape.
+is safe, `Next` returns false, and `Error` preserves the cause. This avoids
+nil-wrapper panics without exposing storage cursor operations.
+
+The package-private `rawIterator` is the only interface with `SeekGE`, `Valid`,
+`Key`, and `Value`. Its key and value slices follow Pebble's borrowing rules and
+are invalidated by the next positioning call or `Close`. Typed adapters decode
+those slices into owned UUID and string values. Path propagation and lazy
+node-ID access are also package-private optional capabilities rather than
+methods every public iterator must pretend to support.
 
 ### Concrete adapters
 
@@ -495,26 +515,25 @@ avoids nil-wrapper panics while retaining the existing API shape.
   flattens those iterators. It consumes the package-private ID-only iterator
   capability when available, so another hop does not force label loading.
 - `neighborIterator` converts each adjacency entry into a lightweight node
-  reference. Its UUID comes directly from the adjacency key; `Node`, `Value`,
-  and `Path` load and cache the other endpoint's label on demand.
+  reference. Its UUID comes directly from the adjacency key; typed node access
+  and private path propagation load and cache the other endpoint's label on
+  demand.
 - `idIterator` materializes UUID results without requesting labels.
-- `filterIterator`, `valueIterator`, `pathIterator`, and `repeatIterator`
+- `nodeFilterIterator`, `valueIterator`, `pathIterator`, and `repeatIterator`
   implement the remaining query steps.
 
-`NodeIterator` remains source-compatible for external implementations. The
-execution engine detects an optional package-private `NodeID` method and falls
-back to `Node` for third-party iterators. Labels are not duplicated into
+The execution engine detects an optional package-private ID-only capability
+and falls back to `Node` for other iterators. Labels are not duplicated into
 adjacency records, so this optimization does not change the persistent schema
 or add a relabel synchronization invariant.
 
 ### Iterator limitations
 
-The interface is broader than several adapters can implement meaningfully.
-`SeekGE` returns false for fixed, index, projection, repeat, and neighbor
-iterators. `Valid` is approximate for some wrappers. `filterIterator`
-structurally implements both typed iterator interfaces even though its actual
-input determines which one is meaningful. New code should not assume uniform
-seek semantics across all iterator types.
+Public graph iterators are forward-only. Seeking, raw key/value access, and
+path inspection are deliberately unavailable; query steps provide projections
+for IDs, properties, and paths. Traversal adapters rely on runtime type checks,
+so an incompatible custom `Step` reports a pipeline type error during
+execution.
 
 Malformed node labels are not consistently rejected: `GetNode` and
 `nodeIterator.Node` currently ignore a failed `DecodeLabel` result. Edge and
@@ -713,8 +732,8 @@ helpers are not a general indexed-filter language.
 
 Public sentinel errors cover invalid database/snapshot handles, missing raw
 snapshot keys, missing nodes/edges/entities, invalid textual node IDs, invalid
-repeat configurations, typed terminal mismatches, dangling edge creation, and
-unsupported schema versions.
+repeat configurations, invalid iterator positions, typed terminal mismatches,
+dangling edge creation, and unsupported schema versions.
 Pebble errors such as `pebble.ErrNotFound`,
 `pebble.ErrReadOnly`, and `pebble.ErrClosed` can also escape from public APIs.
 Encoding errors live in `internal/encoding` but are observable through iterator
@@ -802,9 +821,10 @@ assert both positive logical results and the physical absence of stale keys.
 1. Specify its accepted upstream element type and output type.
 2. Decide whether it is a graph-element iterator or a `resultIterator`.
 3. Propagate upstream errors and close ownership exactly once.
-4. Define `Next`, `Valid`, `SeekGE`, `Key`, `Value`, and `Path` behavior—even if
-   some operations deliberately return false or nil.
-5. Preserve path immutability if the step contributes path state.
+4. Implement the common `Next`, `Error`, and `Close` lifecycle, plus exactly one
+   meaningful typed result capability where applicable.
+5. Use package-private capabilities for path or ID propagation only when the
+   step supports them, and preserve path immutability.
 6. Define ordering, duplicates, missing-property behavior, and materialized
    result shape.
 7. Test empty streams, construction failures, malformed data, and cleanup.

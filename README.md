@@ -174,6 +174,14 @@ Labels passed to `Out` or `In` use exact Pebble ranges instead of scanning
 unrelated adjacency entries; multi-label results have deterministic storage-key
 order regardless of argument order.
 
+Direct `NodeIterator` and `EdgeIterator` values are forward-only. Call `Next`
+before reading each typed `Node` or `Edge`, check `Error` after `Next` returns
+false, and always call `Close`. Typed UUIDs and labels are owned values that
+remain valid after the iterator advances or closes; raw storage buffers and
+seek operations are not exposed. Reading a typed value outside its current
+result window returns `ErrInvalidIteratorState`. Transaction iterators must be
+closed before their owning transaction.
+
 Every `Repeat` must be followed immediately by a positive `Times`, a non-nil
 `Until`, or the explicit `AllowUnboundedRepeat` opt-in. Repeat modifiers may be
 combined and can appear in any order, but they cannot be added after another

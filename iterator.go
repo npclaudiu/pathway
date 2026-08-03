@@ -8,41 +8,41 @@ import (
 	"github.com/npclaudiu/pathway/internal/encoding"
 )
 
-// Iterator is the generic interface for iterating over key-value pairs.
-// It abstracts the underlying storage iterator.
-// Users typically interact with specific interfaces like NodeIterator or EdgeIterator.
+// Iterator is the common lifecycle contract for graph and traversal results.
+//
+// Call Next before reading each result. A true return positions the iterator on
+// one result until the next call to Next. False means iteration has ended;
+// callers must then check Error. Close releases iterator resources and must be
+// called once on every iterator, including empty and failed iterators. Close
+// ends the iterator lifetime; no methods may be called afterward. Iterators are
+// not safe for concurrent use. An iterator returned by Tx must be closed before
+// its transaction closes.
 type Iterator interface {
-	// Next advances the iterator to the next element. Returns false if exhausted/error.
+	// Next advances to the next result. It returns false on exhaustion or error.
 	Next() bool
-	// SeekGE moves to the first key greater than or equal to the given key.
-	SeekGE(key []byte) bool
-	// Key returns the current key.
-	Key() []byte
-	// Value returns the current value.
-	Value() []byte
-	// Valid returns true if the iterator is positioned at a valid element.
-	Valid() bool
-	// Close releases resources.
+	// Close releases all resources owned by the iterator.
 	Close() error
-	// Error returns any accumulated error.
+	// Error reports construction or advancement errors. It is checked after
+	// Next returns false and does not report exhaustion as an error.
 	Error() error
-
-	// Path returns the current path history for the element.
-	Path() Path
 }
 
-// EdgeIterator iterates over edges returning typed data.
+// EdgeIterator iterates over typed edges. Edge is valid only after Next returns
+// true and before Next is called again or the iterator is closed. Its UUIDs and
+// string are caller-owned values and remain valid after advancement or Close.
 type EdgeIterator interface {
-	Iterator // Embed generic iterator
+	Iterator
 	// Edge returns the edge ID, the node at the other end of the adjacency,
 	// its label, and any decoding error. The other node is the target for an
 	// outgoing iterator and the source for an incoming iterator.
 	Edge() (uuid.UUID, uuid.UUID, string, error)
 }
 
-// NodeIterator iterates over nodes returning typed data.
+// NodeIterator iterates over typed nodes. Node is valid only after Next returns
+// true and before Next is called again or the iterator is closed. Its UUID and
+// string are caller-owned values and remain valid after advancement or Close.
 type NodeIterator interface {
-	Iterator // Embed generic iterator
+	Iterator
 	// Node returns the ID and Label of the current node.
 	Node() (uuid.UUID, string, error)
 }
@@ -74,12 +74,12 @@ type resultSizeHinter interface {
 // nodeIDIterator is an internal optional capability for consuming a node ID
 // without forcing lazy iterators to load the node label.
 type nodeIDIterator interface {
-	NodeID() (uuid.UUID, error)
+	nodeID() (uuid.UUID, error)
 }
 
 func currentNodeID(iter Iterator) (uuid.UUID, error) {
 	if ids, ok := iter.(nodeIDIterator); ok {
-		return ids.NodeID()
+		return ids.nodeID()
 	}
 	if nodes, ok := iter.(NodeIterator); ok {
 		id, _, err := nodes.Node()
@@ -88,8 +88,39 @@ func currentNodeID(iter Iterator) (uuid.UUID, error) {
 	return uuid.Nil, errors.New("pipeline type mismatch: expected node")
 }
 
+// rawIterator is the package-private storage cursor used by typed adapters.
+// Key and Value follow Pebble's lifetime rule: their buffers are valid only
+// until the next positioning call or Close.
+type rawIterator interface {
+	Next() bool
+	SeekGE([]byte) bool
+	Key() []byte
+	Value() []byte
+	Valid() bool
+	Close() error
+	Error() error
+}
+
+type pathSource interface {
+	path() Path
+}
+
+func currentPath(iter Iterator) Path {
+	if source, ok := iter.(pathSource); ok {
+		return source.path()
+	}
+	return nil
+}
+
+func iteratorStateError(err error) error {
+	if err != nil {
+		return err
+	}
+	return ErrInvalidIteratorState
+}
+
 // errorIterator preserves an iterator-construction error while providing a
-// safe, inert implementation of every Iterator method.
+// safe, inert implementation of every rawIterator method.
 type errorIterator struct {
 	err error
 }
@@ -102,17 +133,18 @@ func (it *errorIterator) Value() []byte         { return nil }
 func (it *errorIterator) Valid() bool           { return false }
 func (it *errorIterator) Close() error          { return nil }
 func (it *errorIterator) Error() error          { return it.err }
-func (it *errorIterator) Path() Path            { return nil }
 
 // edgeIterator implements EdgeIterator using the generic Iterator.
 type edgeIterator struct {
-	iter  Iterator
-	valid bool
-	err   error
-	first bool
+	iter    rawIterator
+	valid   bool
+	current bool
+	err     error
+	first   bool
 }
 
 func (it *edgeIterator) Next() bool {
+	it.current = false
 	if it.err != nil {
 		return false
 	}
@@ -124,15 +156,17 @@ func (it *edgeIterator) Next() bool {
 
 	if it.first {
 		it.first = false
+		it.current = it.valid
 		return it.valid
 	}
 	it.valid = it.iter.Next()
+	it.current = it.valid
 	return it.valid
 }
 
 func (it *edgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
-	if !it.valid {
-		return uuid.Nil, uuid.Nil, "", it.Error()
+	if !it.current {
+		return uuid.Nil, uuid.Nil, "", iteratorStateError(it.Error())
 	}
 	// Key format: [Prefix] + [SourceID] + [LabelLen] + [Label] +
 	// [TargetID] + [EdgeID]. Incoming keys use target/source in place of
@@ -172,12 +206,6 @@ func (it *edgeIterator) Error() error {
 	}
 	return it.iter.Error()
 }
-
-func (it *edgeIterator) Key() []byte            { return it.iter.Key() }
-func (it *edgeIterator) Value() []byte          { return it.iter.Value() }
-func (it *edgeIterator) Valid() bool            { return it.valid && it.iter.Valid() }
-func (it *edgeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
-func (it *edgeIterator) Path() Path             { return it.iter.Path() }
 
 // multiEdgeIterator consumes exact, disjoint label ranges one at a time. Only
 // one Pebble iterator is open at once, even when many labels are requested.
@@ -220,8 +248,8 @@ func (it *multiEdgeIterator) Next() bool {
 }
 
 func (it *multiEdgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
-	if it.current == nil {
-		return uuid.Nil, uuid.Nil, "", it.Error()
+	if !it.valid || it.current == nil {
+		return uuid.Nil, uuid.Nil, "", iteratorStateError(it.Error())
 	}
 	return it.current.Edge()
 }
@@ -246,38 +274,17 @@ func (it *multiEdgeIterator) Error() error {
 	return nil
 }
 
-func (it *multiEdgeIterator) Key() []byte {
-	if it.current == nil {
-		return nil
-	}
-	return it.current.Key()
-}
-func (it *multiEdgeIterator) Value() []byte {
-	if it.current == nil {
-		return nil
-	}
-	return it.current.Value()
-}
-func (it *multiEdgeIterator) Valid() bool {
-	return it.valid && it.tx.contextErr() == nil && it.current != nil && it.current.Valid()
-}
-func (it *multiEdgeIterator) SeekGE([]byte) bool { return false }
-func (it *multiEdgeIterator) Path() Path {
-	if it.current == nil {
-		return nil
-	}
-	return it.current.Path()
-}
-
 // nodeIterator implements NodeIterator using the generic Iterator.
 type nodeIterator struct {
-	iter  Iterator
-	valid bool
-	err   error
-	first bool
+	iter    rawIterator
+	valid   bool
+	current bool
+	err     error
+	first   bool
 }
 
 func (it *nodeIterator) Next() bool {
+	it.current = false
 	if it.err != nil {
 		return false
 	}
@@ -288,17 +295,19 @@ func (it *nodeIterator) Next() bool {
 	}
 	if it.first {
 		it.first = false
+		it.current = it.valid
 		return it.valid
 	}
 	it.valid = it.iter.Next()
+	it.current = it.valid
 	return it.valid
 }
 
 func (it *nodeIterator) Node() (uuid.UUID, string, error) {
-	if !it.valid {
-		return uuid.Nil, "", it.Error()
+	if !it.current {
+		return uuid.Nil, "", iteratorStateError(it.Error())
 	}
-	id, err := it.NodeID()
+	id, err := it.nodeID()
 	if err != nil {
 		return uuid.Nil, "", err
 	}
@@ -309,9 +318,9 @@ func (it *nodeIterator) Node() (uuid.UUID, string, error) {
 	return id, label, nil
 }
 
-func (it *nodeIterator) NodeID() (uuid.UUID, error) {
-	if !it.valid {
-		return uuid.Nil, it.Error()
+func (it *nodeIterator) nodeID() (uuid.UUID, error) {
+	if !it.current {
+		return uuid.Nil, iteratorStateError(it.Error())
 	}
 	key := it.iter.Key()
 	if len(key) < 17 {
@@ -333,21 +342,25 @@ func (it *nodeIterator) Error() error {
 	return it.iter.Error()
 }
 
-func (it *nodeIterator) Key() []byte            { return it.iter.Key() }
-func (it *nodeIterator) Value() []byte          { return it.iter.Value() }
-func (it *nodeIterator) Valid() bool            { return it.valid && it.iter.Valid() }
-func (it *nodeIterator) SeekGE(key []byte) bool { return it.iter.SeekGE(key) }
-func (it *nodeIterator) Path() Path             { return it.iter.Path() }
+func (it *nodeIterator) path() Path {
+	id, label, err := it.Node()
+	if err != nil {
+		return nil
+	}
+	return Path{{Kind: PathNode, ID: id, Label: label}}
+}
 
 // nodeIndexIterator implements NodeIterator using the index keys.
 type nodeIndexIterator struct {
-	iter  Iterator
-	valid bool
-	err   error
-	first bool
+	iter    rawIterator
+	valid   bool
+	current bool
+	err     error
+	first   bool
 }
 
 func (it *nodeIndexIterator) Next() bool {
+	it.current = false
 	if it.err != nil {
 		return false
 	}
@@ -358,17 +371,19 @@ func (it *nodeIndexIterator) Next() bool {
 	}
 	if it.first {
 		it.first = false
+		it.current = it.valid
 		return it.valid
 	}
 	it.valid = it.iter.Next()
+	it.current = it.valid
 	return it.valid
 }
 
 func (it *nodeIndexIterator) Node() (uuid.UUID, string, error) {
-	if !it.valid {
-		return uuid.Nil, "", it.Error()
+	if !it.current {
+		return uuid.Nil, "", iteratorStateError(it.Error())
 	}
-	id, err := it.NodeID()
+	id, err := it.nodeID()
 	if err != nil {
 		return uuid.Nil, "", err
 	}
@@ -385,9 +400,9 @@ func (it *nodeIndexIterator) Node() (uuid.UUID, string, error) {
 	return id, label, nil
 }
 
-func (it *nodeIndexIterator) NodeID() (uuid.UUID, error) {
-	if !it.valid {
-		return uuid.Nil, it.Error()
+func (it *nodeIndexIterator) nodeID() (uuid.UUID, error) {
+	if !it.current {
+		return uuid.Nil, iteratorStateError(it.Error())
 	}
 	key := it.iter.Key()
 	if len(key) < 17 {
@@ -415,36 +430,8 @@ func (it *nodeIndexIterator) Error() error {
 	return nil
 }
 
-func (it *nodeIndexIterator) Key() []byte {
-	// Reconstruct Node key for standard Iterator interface
-	if !it.valid {
-		return nil
-	}
-	id, err := it.NodeID()
-	if err != nil {
-		return nil
-	}
-	return encoding.EncodeNodeKey(id)
-}
-
-func (it *nodeIndexIterator) Value() []byte {
-	// Reconstruct Value for standard Iterator interface
-	if !it.valid {
-		return nil
-	}
-	_, label, err := it.Node()
-	if err != nil {
-		return nil
-	}
-	return []byte(label)
-}
-
-func (it *nodeIndexIterator) Valid() bool {
-	return it.valid && it.iter != nil && it.iter.Valid()
-}
-func (it *nodeIndexIterator) SeekGE(key []byte) bool { return false } // Seek on index iterator implies index seek, which means prefix needs to change.
-func (it *nodeIndexIterator) Path() Path {
-	if !it.valid {
+func (it *nodeIndexIterator) path() Path {
+	if !it.current {
 		return nil
 	}
 	id, label, err := it.Node()
@@ -501,15 +488,18 @@ func (it *fixedNodeIterator) Next() bool {
 }
 
 func (it *fixedNodeIterator) Node() (uuid.UUID, string, error) {
+	if !it.positioned() {
+		return uuid.Nil, "", iteratorStateError(it.Error())
+	}
 	if err := it.loadLabel(); err != nil {
 		return uuid.Nil, "", err
 	}
 	return it.curID, it.curLbl, it.err
 }
 
-func (it *fixedNodeIterator) NodeID() (uuid.UUID, error) {
-	if !it.Valid() {
-		return uuid.Nil, it.Error()
+func (it *fixedNodeIterator) nodeID() (uuid.UUID, error) {
+	if !it.positioned() {
+		return uuid.Nil, iteratorStateError(it.Error())
 	}
 	return it.curID, nil
 }
@@ -535,19 +525,11 @@ func (it *fixedNodeIterator) loadLabel() error {
 func (it *fixedNodeIterator) Close() error { return nil }
 func (it *fixedNodeIterator) Error() error { return it.err }
 
-func (it *fixedNodeIterator) Value() []byte {
-	if err := it.loadLabel(); err != nil {
-		return nil
-	}
-	return []byte(it.curLbl)
-}
-func (it *fixedNodeIterator) Key() []byte { return encoding.EncodeNodeKey(it.curID) }
-func (it *fixedNodeIterator) Valid() bool {
+func (it *fixedNodeIterator) positioned() bool {
 	return it.idx >= 0 && it.idx < len(it.ids) && it.err == nil
 }
-func (it *fixedNodeIterator) SeekGE(key []byte) bool { return false }
 
-func (it *fixedNodeIterator) Path() Path {
+func (it *fixedNodeIterator) path() Path {
 	if err := it.loadLabel(); err != nil {
 		return nil
 	}
@@ -562,6 +544,7 @@ type flatMapEdgeIterator struct {
 	prev    Iterator
 	mapper  func(uuid.UUID) Iterator // Returns generic Iterator which must be EdgeIterator
 	curIter Iterator                 // Current inner iterator (EdgeIterator)
+	valid   bool
 	err     error
 }
 
@@ -570,8 +553,10 @@ func newFlatMapEdgeIterator(tx *Tx, prev Iterator, mapper func(uuid.UUID) Iterat
 }
 
 func (it *flatMapEdgeIterator) Next() bool {
+	it.valid = false
 	if it.curIter != nil {
 		if it.curIter.Next() {
+			it.valid = true
 			return true
 		}
 		if err := errors.Join(it.curIter.Error(), it.curIter.Close()); err != nil {
@@ -585,25 +570,10 @@ func (it *flatMapEdgeIterator) Next() bool {
 		return false
 	}
 
-	// Extract Node ID from prev
-	var nodeID uuid.UUID
-	// Try typed
-	if _, ok := it.prev.(NodeIterator); ok {
-		id, err := currentNodeID(it.prev)
-		if err != nil {
-			it.err = err
-			return false
-		}
-		nodeID = id
-	} else {
-		// Fallback: try key
-		key := it.prev.Key()
-		if len(key) > 17 && key[0] == encoding.PrefixNode {
-			copy(nodeID[:], key[1:])
-		} else {
-			it.err = errors.New("pipeline type mismatch: expected Node")
-			return false
-		}
+	nodeID, err := currentNodeID(it.prev)
+	if err != nil {
+		it.err = err
+		return false
 	}
 
 	it.curIter = it.mapper(nodeID)
@@ -611,8 +581,8 @@ func (it *flatMapEdgeIterator) Next() bool {
 }
 
 func (it *flatMapEdgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
-	if it.curIter == nil {
-		return uuid.Nil, uuid.Nil, "", nil
+	if !it.valid || it.curIter == nil {
+		return uuid.Nil, uuid.Nil, "", iteratorStateError(it.Error())
 	}
 	if ei, ok := it.curIter.(EdgeIterator); ok {
 		return ei.Edge()
@@ -637,23 +607,8 @@ func (it *flatMapEdgeIterator) Error() error {
 	return it.prev.Error()
 }
 
-func (it *flatMapEdgeIterator) Key() []byte {
-	if it.curIter != nil {
-		return it.curIter.Key()
-	}
-	return nil
-}
-func (it *flatMapEdgeIterator) Value() []byte {
-	if it.curIter != nil {
-		return it.curIter.Value()
-	}
-	return nil
-}
-func (it *flatMapEdgeIterator) Valid() bool          { return it.curIter != nil && it.curIter.Valid() }
-func (it *flatMapEdgeIterator) SeekGE(k []byte) bool { return false }
-
-func (it *flatMapEdgeIterator) Path() Path {
-	p := it.prev.Path()
+func (it *flatMapEdgeIterator) path() Path {
+	p := currentPath(it.prev)
 	if p == nil {
 		p = Path{}
 	}
@@ -676,9 +631,10 @@ func (it *flatMapEdgeIterator) Path() Path {
 
 // nodeFilterIterator filters a node stream with a typed predicate.
 type nodeFilterIterator struct {
-	prev Iterator
-	pred NodePredicate
-	err  error
+	prev  Iterator
+	pred  NodePredicate
+	valid bool
+	err   error
 }
 
 func newNodeFilterIterator(prev Iterator, pred NodePredicate) *nodeFilterIterator {
@@ -686,6 +642,7 @@ func newNodeFilterIterator(prev Iterator, pred NodePredicate) *nodeFilterIterato
 }
 
 func (it *nodeFilterIterator) Next() bool {
+	it.valid = false
 	nodes, ok := it.prev.(NodeIterator)
 	if !ok {
 		it.err = errors.New("pipeline type mismatch: node filter requires nodes")
@@ -698,6 +655,7 @@ func (it *nodeFilterIterator) Next() bool {
 			return false
 		}
 		if it.pred(Node{ID: id, Label: label}) {
+			it.valid = true
 			return true
 		}
 	}
@@ -708,19 +666,23 @@ func (it *nodeFilterIterator) Close() error { return it.prev.Close() }
 func (it *nodeFilterIterator) Error() error {
 	return errors.Join(it.err, it.prev.Error())
 }
-func (it *nodeFilterIterator) Key() []byte          { return it.prev.Key() }
-func (it *nodeFilterIterator) Value() []byte        { return it.prev.Value() }
-func (it *nodeFilterIterator) Valid() bool          { return it.err == nil && it.prev.Valid() }
-func (it *nodeFilterIterator) SeekGE(k []byte) bool { return it.prev.SeekGE(k) }
-func (it *nodeFilterIterator) Path() Path           { return it.prev.Path() }
+func (it *nodeFilterIterator) path() Path { return currentPath(it.prev) }
 
 func (it *nodeFilterIterator) Node() (uuid.UUID, string, error) {
+	if !it.valid {
+		return uuid.Nil, "", iteratorStateError(it.Error())
+	}
 	if ni, ok := it.prev.(NodeIterator); ok {
 		return ni.Node()
 	}
-	return uuid.Nil, "", errors.New("not a node iterator")
+	return uuid.Nil, "", errors.New("pipeline type mismatch: node filter requires nodes")
 }
-func (it *nodeFilterIterator) NodeID() (uuid.UUID, error) { return currentNodeID(it.prev) }
+func (it *nodeFilterIterator) nodeID() (uuid.UUID, error) {
+	if !it.valid {
+		return uuid.Nil, iteratorStateError(it.Error())
+	}
+	return currentNodeID(it.prev)
+}
 func (it *nodeFilterIterator) ResultSizeHint() int {
 	if hinted, ok := it.prev.(resultSizeHinter); ok {
 		return hinted.ResultSizeHint()
@@ -806,12 +768,8 @@ func (it *valueIterator) Result() (any, error) {
 
 func (it *valueIterator) ResultShape() traversalResultShape { return resultShapeDynamic }
 
-func (it *valueIterator) Close() error       { return it.prev.Close() }
-func (it *valueIterator) Key() []byte        { return nil }
-func (it *valueIterator) Value() []byte      { return nil }
-func (it *valueIterator) Valid() bool        { return it.valid }
-func (it *valueIterator) SeekGE([]byte) bool { return false }
-func (it *valueIterator) Path() Path         { return it.prev.Path() }
+func (it *valueIterator) Close() error { return it.prev.Close() }
+func (it *valueIterator) path() Path   { return currentPath(it.prev) }
 func (it *valueIterator) Error() error {
 	if it.err != nil {
 		return it.err
@@ -831,18 +789,10 @@ func newPathIterator(prev Iterator) *pathIterator {
 
 func (it *pathIterator) Next() bool {
 	if it.prev.Next() {
-		it.curPath = append(Path(nil), it.prev.Path()...)
+		it.curPath = append(Path(nil), currentPath(it.prev)...)
 		return true
 	}
 	return false
-}
-
-func (it *pathIterator) Key() []byte {
-	return nil
-}
-
-func (it *pathIterator) Value() []byte {
-	return nil
 }
 
 func (it *pathIterator) Result() (any, error) {
@@ -851,11 +801,9 @@ func (it *pathIterator) Result() (any, error) {
 
 func (it *pathIterator) ResultShape() traversalResultShape { return resultShapePath }
 
-func (it *pathIterator) Close() error         { return it.prev.Close() }
-func (it *pathIterator) Error() error         { return it.prev.Error() }
-func (it *pathIterator) Valid() bool          { return it.prev.Valid() }
-func (it *pathIterator) SeekGE(k []byte) bool { return it.prev.SeekGE(k) }
-func (it *pathIterator) Path() Path           { return append(Path(nil), it.curPath...) }
+func (it *pathIterator) Close() error { return it.prev.Close() }
+func (it *pathIterator) Error() error { return it.prev.Error() }
+func (it *pathIterator) path() Path   { return append(Path(nil), it.curPath...) }
 func (it *pathIterator) ResultSizeHint() int {
 	if hinted, ok := it.prev.(resultSizeHinter); ok {
 		return hinted.ResultSizeHint()
@@ -876,6 +824,7 @@ type repeatIterator struct {
 	conf    *RepeatConfig
 	queue   []traverser
 	inited  bool
+	valid   bool
 	curItem traverser
 	err     error
 }
@@ -885,6 +834,7 @@ func newRepeatIterator(tx *Tx, prev Iterator, conf *RepeatConfig) *repeatIterato
 }
 
 func (it *repeatIterator) Next() bool {
+	it.valid = false
 	if it.contextCanceled() {
 		return false
 	}
@@ -905,7 +855,7 @@ func (it *repeatIterator) Next() bool {
 				return false
 			}
 			it.queue = append(it.queue, traverser{
-				node: Node{ID: id, Label: lbl}, path: it.prev.Path(), depth: 0,
+				node: Node{ID: id, Label: lbl}, path: currentPath(it.prev), depth: 0,
 			})
 		}
 		if err := it.prev.Error(); err != nil {
@@ -936,6 +886,7 @@ func (it *repeatIterator) Next() bool {
 
 		if stop {
 			it.curItem = cur
+			it.valid = true
 			return true
 		}
 
@@ -998,7 +949,7 @@ func (it *repeatIterator) Next() bool {
 					return false
 				}
 				it.queue = append(it.queue, traverser{
-					node: Node{ID: nid, Label: nlbl}, path: iter.Path(), depth: cur.depth + 1,
+					node: Node{ID: nid, Label: nlbl}, path: currentPath(iter), depth: cur.depth + 1,
 				})
 			}
 			if err := errors.Join(iter.Error(), iter.Close()); err != nil {
@@ -1009,6 +960,7 @@ func (it *repeatIterator) Next() bool {
 
 		if it.conf.emit {
 			it.curItem = cur
+			it.valid = true
 			return true
 		}
 	}
@@ -1028,16 +980,20 @@ func (it *repeatIterator) contextCanceled() bool {
 }
 
 func (it *repeatIterator) Node() (uuid.UUID, string, error) {
+	if !it.valid {
+		return uuid.Nil, "", iteratorStateError(it.Error())
+	}
 	return it.curItem.node.ID, it.curItem.node.Label, nil
 }
-func (it *repeatIterator) NodeID() (uuid.UUID, error) { return it.curItem.node.ID, it.err }
-func (it *repeatIterator) Close() error               { return it.prev.Close() }
-func (it *repeatIterator) Error() error               { return it.err }
-func (it *repeatIterator) Key() []byte                { return encoding.EncodeNodeKey(it.curItem.node.ID) }
-func (it *repeatIterator) Value() []byte              { return []byte(it.curItem.node.Label) }
-func (it *repeatIterator) Valid() bool                { return true }
-func (it *repeatIterator) SeekGE(k []byte) bool       { return false }
-func (it *repeatIterator) Path() Path                 { return it.curItem.path }
+func (it *repeatIterator) nodeID() (uuid.UUID, error) {
+	if !it.valid {
+		return uuid.Nil, iteratorStateError(it.Error())
+	}
+	return it.curItem.node.ID, nil
+}
+func (it *repeatIterator) Close() error { return it.prev.Close() }
+func (it *repeatIterator) Error() error { return it.err }
+func (it *repeatIterator) path() Path   { return it.curItem.path }
 
 // neighborIterator wraps an EdgeIterator and yields the neighbor Node.
 type neighborIterator struct {
@@ -1077,18 +1033,18 @@ func (it *neighborIterator) Next() bool {
 }
 
 func (it *neighborIterator) Node() (uuid.UUID, string, error) {
+	if !it.valid {
+		return uuid.Nil, "", iteratorStateError(it.Error())
+	}
 	if err := it.loadLabel(); err != nil {
 		return uuid.Nil, "", err
 	}
 	return it.curID, it.curLbl, nil
 }
 
-func (it *neighborIterator) NodeID() (uuid.UUID, error) {
+func (it *neighborIterator) nodeID() (uuid.UUID, error) {
 	if !it.valid {
-		if err := it.Error(); err != nil {
-			return uuid.Nil, err
-		}
-		return uuid.Nil, errors.New("invalid iterator state")
+		return uuid.Nil, iteratorStateError(it.Error())
 	}
 	return it.curID, nil
 }
@@ -1122,22 +1078,12 @@ func (it *neighborIterator) Error() error {
 	return it.iter.Error()
 }
 
-// Key/Value reflect the Node
-func (it *neighborIterator) Key() []byte { return encoding.EncodeNodeKey(it.curID) }
-func (it *neighborIterator) Value() []byte {
-	if err := it.loadLabel(); err != nil {
-		return nil
-	}
-	return []byte(it.curLbl)
-}
-func (it *neighborIterator) Valid() bool          { return it.valid && it.err == nil }
-func (it *neighborIterator) SeekGE(k []byte) bool { return false }
-func (it *neighborIterator) Path() Path {
+func (it *neighborIterator) path() Path {
 	if err := it.loadLabel(); err != nil {
 		return nil
 	}
 	// Extend path from edge
-	p := it.iter.Path()
+	p := currentPath(it.iter)
 	path := make(Path, len(p)+1)
 	copy(path, p)
 	path[len(p)] = PathElement{Kind: PathNode, ID: it.curID, Label: it.curLbl}
@@ -1181,12 +1127,7 @@ func (it *idIterator) Result() (any, error) {
 
 func (it *idIterator) ResultShape() traversalResultShape { return resultShapeID }
 
-func (it *idIterator) Close() error       { return it.prev.Close() }
-func (it *idIterator) Key() []byte        { return nil }
-func (it *idIterator) Value() []byte      { return nil }
-func (it *idIterator) Valid() bool        { return it.valid }
-func (it *idIterator) SeekGE([]byte) bool { return false }
-func (it *idIterator) Path() Path         { return nil }
+func (it *idIterator) Close() error { return it.prev.Close() }
 func (it *idIterator) Error() error {
 	if it.err != nil {
 		return it.err

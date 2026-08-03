@@ -567,7 +567,7 @@ func (tp *TraversalPipeline) each(
 			id, other, label, err = current.Edge()
 			result = Edge{ID: id, Other: other, Label: label}
 		default:
-			result = append([]byte(nil), iter.Key()...)
+			return fmt.Errorf("%w: iterator %T has no typed result", ErrTraversalResult, iter)
 		}
 		if err != nil {
 			return err

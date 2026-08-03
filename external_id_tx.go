@@ -163,7 +163,7 @@ func (tx *Tx) setExternalIDBinding(externalID ExternalID, nodeID uuid.UUID) erro
 
 func (tx *Tx) deleteExternalIDs(nodeID uuid.UUID) (resultErr error) {
 	prefix := encoding.EncodeExternalIDReversePrefix(nodeID)
-	iter, err := tx.NewIterator(&pebble.IterOptions{
+	iter, err := tx.newIterator(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: keyUpperBound(prefix),
 	})

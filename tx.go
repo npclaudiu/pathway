@@ -25,7 +25,7 @@ type Tx struct {
 	externalIDsLocked bool
 }
 
-// pebbleIterator implements the Iterator interface for pebble.Iterator.
+// pebbleIterator adapts Pebble to the package-private rawIterator cursor.
 type pebbleIterator struct {
 	*pebble.Iterator
 	ctx context.Context
@@ -70,14 +70,10 @@ func (p *pebbleIterator) Value() []byte {
 	return p.Iterator.Value()
 }
 
-func (p *pebbleIterator) Path() Path {
-	return nil // Base iterator has no path history
-}
-
-// NewIterator creates a new low-level iterator for the transaction.
-// This is primarily for internal use; users should typically use high-level iterators
-// like ScanNodes, OutEdges, etc.
-func (tx *Tx) NewIterator(opts *pebble.IterOptions) (Iterator, error) {
+// newIterator creates a low-level storage cursor. Raw keys, values, seeking,
+// and positioning remain private to storage adapters; callers use ScanNodes,
+// FindNodes, OutEdges, or InEdges instead.
+func (tx *Tx) newIterator(opts *pebble.IterOptions) (rawIterator, error) {
 	if tx.closed {
 		return nil, pebble.ErrClosed
 	}
@@ -646,7 +642,7 @@ func (tx *Tx) edgeRange(prefix []byte) EdgeIterator {
 		LowerBound: prefix,
 		UpperBound: keyUpperBound(prefix),
 	}
-	iter, err := tx.NewIterator(opts)
+	iter, err := tx.newIterator(opts)
 	if err != nil {
 		return &edgeIterator{iter: newErrorIterator(err), err: err}
 	}
@@ -669,7 +665,7 @@ func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterat
 		UpperBound: keyUpperBound(prefix),
 	}
 
-	iter, err := tx.NewIterator(opts)
+	iter, err := tx.newIterator(opts)
 	if err != nil {
 		return &nodeIndexIterator{iter: newErrorIterator(err), err: err}
 	}
@@ -687,7 +683,7 @@ func (tx *Tx) ScanNodes() NodeIterator {
 		UpperBound: keyUpperBound(prefix),
 	}
 
-	iter, err := tx.NewIterator(opts)
+	iter, err := tx.newIterator(opts)
 	if err != nil {
 		return &nodeIterator{iter: newErrorIterator(err), err: err}
 	}
