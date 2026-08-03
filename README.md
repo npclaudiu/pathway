@@ -112,6 +112,12 @@ existing database and creates no indexes for a new database. Use a non-nil
 empty slice to remove all indexes. `FindNodes` only returns results for a
 configured label/property pair.
 
+`OpenWithOptions` takes an owned snapshot of its configuration. It clones
+`PebbleOptions`, mutable Pebble listener/map/slice containers, and `Indexes`
+before applying defaults or replacing the filesystem for `:memory:`. Callers
+may therefore reuse one options value for concurrent opens, and later changes
+to the original containers do not alter an open database.
+
 ### Write durability
 
 Updates are synchronously durable by default. For replayable imports where

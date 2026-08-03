@@ -3,6 +3,8 @@ package pathway
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,8 +66,10 @@ type Options struct {
 	// If nil, no internal logging will be performed.
 	Logger Logger
 
-	// PebbleOptions allows customizing the underlying storage engine (cockroachdb/pebble).
-	// Use this to tune cache sizes, compaction settings, or file system options.
+	// PebbleOptions allows customizing the underlying storage engine
+	// (cockroachdb/pebble). OpenWithOptions clones this value before applying
+	// defaults or in-memory overrides. Use it to tune cache sizes, compaction
+	// settings, or file system options.
 	PebbleOptions *pebble.Options
 
 	// Durability controls Update commit synchronization. The zero value is
@@ -105,18 +109,19 @@ func Open(path string) (*Database, error) {
 	return OpenWithOptions(path, Options{})
 }
 
-// OpenWithOptions opens the database with specific options. In addition to
-// logging, monitoring hooks, and Pebble settings, options configure write
-// durability and persisted exact-match node-property indexes.
+// OpenWithOptions opens the database with specific options. It takes an owned
+// snapshot of mutable option containers, so it never applies defaults or
+// in-memory overrides to caller-owned configuration and one Options value may
+// be reused by concurrent opens. In addition to logging, monitoring hooks, and
+// Pebble settings, options configure write durability and persisted exact-match
+// node-property indexes.
 func OpenWithOptions(path string, opts Options) (*Database, error) {
 	writeOpt, err := writeOptionsForDurability(opts.Durability)
 	if err != nil {
 		return nil, err
 	}
+	opts = cloneOptions(opts)
 	pOpts := opts.PebbleOptions
-	if pOpts == nil {
-		pOpts = &pebble.Options{}
-	}
 	if path == ":memory:" {
 		pOpts.FS = vfs.NewMem()
 		path = ""
@@ -138,6 +143,31 @@ func OpenWithOptions(path string, opts Options) (*Database, error) {
 		indexes:  indexDefinitionMap(definitions),
 		writeOpt: writeOpt,
 	}, nil
+}
+
+func cloneOptions(opts Options) Options {
+	cloned := opts
+	cloned.PebbleOptions = clonePebbleOptions(opts.PebbleOptions)
+	if opts.Indexes != nil {
+		cloned.Indexes = slices.Clone(opts.Indexes)
+	}
+	return cloned
+}
+
+func clonePebbleOptions(opts *pebble.Options) *pebble.Options {
+	cloned := opts.Clone()
+	if opts == nil {
+		return cloned
+	}
+	if opts.EventListener != nil {
+		listener := *opts.EventListener
+		cloned.EventListener = &listener
+	}
+	cloned.Filters = maps.Clone(opts.Filters)
+	cloned.KeySchemas = maps.Clone(opts.KeySchemas)
+	cloned.BlockPropertyCollectors = slices.Clone(opts.BlockPropertyCollectors)
+	cloned.WALRecoveryDirs = slices.Clone(opts.WALRecoveryDirs)
+	return cloned
 }
 
 func writeOptionsForDurability(mode DurabilityMode) (pebble.WriteOptions, error) {

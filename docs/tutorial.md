@@ -48,6 +48,11 @@ the desired set: newly added indexes are rebuilt from existing nodes and
 removed indexes are dropped atomically. `FindNodes` returns no matches for an
 unindexed label/property pair.
 
+`OpenWithOptions` clones its Pebble configuration and index slice before
+opening. The same options value can be reused for concurrent databases, and
+the `:memory:` filesystem override never changes the caller's
+`PebbleOptions`.
+
 `DurabilitySync` waits for each successful `Update` to be synchronized to
 stable storage. For replayable bulk imports, `DurabilityNoSync` can reduce
 commit latency, but a process or machine crash may lose recent updates that

@@ -205,7 +205,7 @@ func (w *BulkWriter) SetProperties(id uuid.UUID, props map[string]any) error
 SetProperties completely replaces an existing node or edge's properties in the current bulk transaction.
 
 <a name="Database"></a>
-## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L86-L93>)
+## type [Database](<https://github.com/npclaudiu/pathway/blob/main/database.go#L90-L97>)
 
 Database represents a connection to the embedded graph database. It is safe for concurrent use by multiple goroutines.
 
@@ -216,7 +216,7 @@ type Database struct {
 ```
 
 <a name="Open"></a>
-### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L104>)
+### func [Open](<https://github.com/npclaudiu/pathway/blob/main/database.go#L108>)
 
 ```go
 func Open(path string) (*Database, error)
@@ -235,13 +235,13 @@ db, err := pathway.Open(":memory:")
 ```
 
 <a name="OpenWithOptions"></a>
-### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L111>)
+### func [OpenWithOptions](<https://github.com/npclaudiu/pathway/blob/main/database.go#L118>)
 
 ```go
 func OpenWithOptions(path string, opts Options) (*Database, error)
 ```
 
-OpenWithOptions opens the database with specific options. In addition to logging, monitoring hooks, and Pebble settings, options configure write durability and persisted exact\-match node\-property indexes.
+OpenWithOptions opens the database with specific options. It takes an owned snapshot of mutable option containers, so it never applies defaults or in\-memory overrides to caller\-owned configuration and one Options value may be reused by concurrent opens. In addition to logging, monitoring hooks, and Pebble settings, options configure write durability and persisted exact\-match node\-property indexes.
 
 <a name="Database.BulkUpdate"></a>
 ### func \(\*Database\) [BulkUpdate](<https://github.com/npclaudiu/pathway/blob/main/bulk.go#L25>)
@@ -253,7 +253,7 @@ func (d *Database) BulkUpdate(ctx context.Context, fn func(writer *BulkWriter) e
 BulkUpdate stages nodes, edges, and properties in one transaction and commits them once with the database's configured durability. Any writer operation or callback error rolls back the complete batch, including errors the callback did not explicitly return.
 
 <a name="Database.Close"></a>
-### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L157>)
+### func \(\*Database\) [Close](<https://github.com/npclaudiu/pathway/blob/main/database.go#L187>)
 
 ```go
 func (d *Database) Close() error
@@ -262,7 +262,7 @@ func (d *Database) Close() error
 Close closes the database connection and releases all resources. It is important to call Close\(\) to ensure all data is flushed to disk \(if persistent\) and locks are released.
 
 <a name="Database.Compact"></a>
-### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L244>)
+### func \(\*Database\) [Compact](<https://github.com/npclaudiu/pathway/blob/main/database.go#L274>)
 
 ```go
 func (g *Database) Compact(ctx context.Context) error
@@ -271,7 +271,7 @@ func (g *Database) Compact(ctx context.Context) error
 Compact triggers Pebble's manual compaction for the entire key range. It can be used to reclaim disk space after deleting a large number of nodes or edges. Note: This operation can be expensive and should typically not be run during high load.
 
 <a name="Database.NewReadTx"></a>
-### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L220>)
+### func \(\*Database\) [NewReadTx](<https://github.com/npclaudiu/pathway/blob/main/database.go#L250>)
 
 ```go
 func (d *Database) NewReadTx(ctx context.Context) (*Tx, error)
@@ -289,7 +289,7 @@ func (g *Database) NewSnapshot(ctx context.Context) (*Snapshot, error)
 NewSnapshot creates a snapshot of the current database state. The snapshot is tied to the lifetime of the underlying Graph \(Database\) instance.
 
 <a name="Database.Update"></a>
-### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L171>)
+### func \(\*Database\) [Update](<https://github.com/npclaudiu/pathway/blob/main/database.go#L201>)
 
 ```go
 func (d *Database) Update(ctx context.Context, fn func(tx *Tx) error) error
@@ -306,7 +306,7 @@ err := db.Update(ctx, func(tx *pathway.Tx) error {
 ```
 
 <a name="Database.View"></a>
-### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L202>)
+### func \(\*Database\) [View](<https://github.com/npclaudiu/pathway/blob/main/database.go#L232>)
 
 ```go
 func (d *Database) View(ctx context.Context, fn func(tx *Tx) error) error
@@ -325,7 +325,7 @@ err := db.View(ctx, func(tx *pathway.Tx) error {
 ```
 
 <a name="DurabilityMode"></a>
-## type [DurabilityMode](<https://github.com/npclaudiu/pathway/blob/main/database.go#L32>)
+## type [DurabilityMode](<https://github.com/npclaudiu/pathway/blob/main/database.go#L34>)
 
 DurabilityMode controls whether Update synchronizes its commit to stable storage before returning.
 
@@ -435,7 +435,7 @@ func (id ExternalID) Value() []byte
 Value returns an owned copy of the opaque identifier value.
 
 <a name="IndexDefinition"></a>
-## type [IndexDefinition](<https://github.com/npclaudiu/pathway/blob/main/database.go#L25-L28>)
+## type [IndexDefinition](<https://github.com/npclaudiu/pathway/blob/main/database.go#L27-L30>)
 
 IndexDefinition identifies one node label/property pair that should have an exact\-match property index.
 
@@ -466,7 +466,7 @@ type Iterator interface {
 ```
 
 <a name="Logger"></a>
-## type [Logger](<https://github.com/npclaudiu/pathway/blob/main/database.go#L16-L21>)
+## type [Logger](<https://github.com/npclaudiu/pathway/blob/main/database.go#L18-L23>)
 
 Logger defines a simple logging interface for internal database logs. It allows users to plug in their own logging implementation \(e.g., standard log, zap, logrus\).
 
@@ -514,7 +514,7 @@ type NodePredicate func(Node) bool
 ```
 
 <a name="Options"></a>
-## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L54-L82>)
+## type [Options](<https://github.com/npclaudiu/pathway/blob/main/database.go#L56-L86>)
 
 Options configuration for the database.
 
@@ -542,8 +542,10 @@ type Options struct {
     // If nil, no internal logging will be performed.
     Logger Logger
 
-    // PebbleOptions allows customizing the underlying storage engine (cockroachdb/pebble).
-    // Use this to tune cache sizes, compaction settings, or file system options.
+    // PebbleOptions allows customizing the underlying storage engine
+    // (cockroachdb/pebble). OpenWithOptions clones this value before applying
+    // defaults or in-memory overrides. Use it to tune cache sizes, compaction
+    // settings, or file system options.
     PebbleOptions *pebble.Options
 
     // Durability controls Update commit synchronization. The zero value is

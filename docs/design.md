@@ -276,10 +276,14 @@ using an unsupported Pathway marker is rejected before record decoding.
 ### Opening and options
 
 `Open(":memory:")` installs Pebble's in-memory filesystem and passes an empty
-path to Pebble. `OpenWithOptions` uses the caller's `*pebble.Options` directly;
-for the in-memory special case it assigns the filesystem on that object. This
-means caller-owned options are currently mutable shared configuration rather
-than a cloned value.
+path to Pebble. `OpenWithOptions` first takes an owned configuration snapshot.
+It uses Pebble's `Options.Clone`, copies the event-listener value and mutable
+map/slice containers that Pebble defaulting may populate, copies
+`Options.Indexes`, and only then installs an in-memory filesystem on the clone.
+Caller-owned fields are never assigned or defaulted. Independent opens can
+reuse one options value concurrently; intentional service objects such as a
+configured cache or filesystem remain shared according to Pebble's option
+semantics.
 
 `Options.Indexes` has deliberately tri-state slice semantics. `nil` preserves
 the definitions already stored and creates none in a new database. A non-nil
@@ -896,9 +900,9 @@ design issues are:
 - label-bearing and property projections still perform per-result point reads;
 - mutable, dynamically typed pipelines and dynamically typed projections;
 - synchronous user hooks and predicates can delay cancellation until they return;
-- incomplete repeat validation, cycle policy, queue efficiency, and paths;
-- inconsistent iterator seek/valid and corruption semantics;
-- public exposure of Pebble types and mutable caller-owned Pebble options;
+- eager path tracking for traversals that do not request paths;
+- inconsistent stored-data corruption semantics;
+- public exposure of Pebble types;
 - limited reflection loading and dynamically typed predicates;
 
 These limitations are documented so maintainers do not accidentally treat them
