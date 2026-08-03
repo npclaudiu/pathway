@@ -544,16 +544,22 @@ pipeline type compatibility is enforced dynamically at iteration time.
 
 ### Terminal execution
 
-`ToList` performs all execution:
+`Each` performs traversal execution:
 
 1. Validate the database.
-2. Invoke the optional query-start hook with `context.Background` and the
-   constant descriptor `"Traversal Query"`.
+2. Invoke the optional query-start hook with the caller context and the constant
+   descriptor `"Traversal Query"`.
 3. Create one snapshot-backed read transaction.
 4. Apply step closures in order to form the final iterator stack.
-5. Drain it into `[]interface{}`, allocating the backing slice lazily.
+5. Materialize one owned result at a time and invoke the callback.
 6. Close the iterator stack and transaction, joining close errors.
 7. Invoke the query-end hook with duration and the final error.
+
+Returning an error from the callback terminates the traversal and still runs
+all cleanup. `Each` checks cancellation before building each step and before
+and after iterator advancement, returning the context error promptly between
+results. `ToList` is a convenience terminal over the same executor using
+`context.Background`; it appends each streamed value to a result slice.
 
 Terminal results depend on the final iterator:
 
@@ -564,17 +570,18 @@ Terminal results depend on the final iterator:
   and label;
 - an unknown generic iterator falls back to an owned copy of its raw key.
 
-The terminal uses an iterator cardinality hint when one is available. Otherwise
-it starts with capacity 16, which covers common shallow traversals without the
-repeated slice growth previously visible in allocation profiles. Empty results
-remain nil and do not allocate a result backing slice. Struct values and copied
-fallback keys remain valid after the snapshot and Pebble iterators close.
+When collecting, `ToList` uses an iterator cardinality hint when one is
+available. Otherwise it starts with capacity 16, which covers common shallow
+traversals without the repeated slice growth previously visible in allocation
+profiles. Empty results remain nil and do not allocate a result backing slice.
+Struct values and copied fallback keys remain valid after the snapshot and
+Pebble iterators close. `Each` retains no result collection, so its memory use
+does not grow with result cardinality.
 
-There is no streaming terminal API; every result is held in memory. `ToList`
-does not accept or observe a caller context, and the contexts accepted by
-transaction constructors are not checked during iteration. Observability hooks
-therefore always receive a background context for traversal queries. Hook
-panics are not recovered. The configured `Logger` is currently unused.
+`ToList` still has no context-accepting variant. Cancellation checks also occur
+at terminal boundaries rather than inside every iterator's internal scan or
+repeat loop. Hook panics are not recovered. The configured `Logger` is
+currently unused.
 
 ### ID and property projection
 
@@ -691,6 +698,7 @@ The principal costs and write amplification are architectural, not incidental:
 | Label-bearing one-hop traversal | adjacency scan plus one lazy node point read per edge |
 | Label-filtered adjacency | one exact bounded scan per unique requested label |
 | `Values` | one property point read and full decode per entity |
+| `Each` | snapshot lifecycle and typed value boxing; no result collection |
 | `ToList` | snapshot lifecycle, one result slice, and typed value boxing |
 
 Write benchmarks exercise both synchronous and relaxed durability, with memory
@@ -702,7 +710,7 @@ interpreting results.
 Likely optimization directions must preserve invariants:
 
 - batching label reads when label-bearing nodes must be materialized;
-- streaming terminal methods and caller contexts;
+- context-aware collection and cancellation checks inside iterator loops;
 - a typed property codec that avoids protobuf/`structpb` hot-path conversions;
 - queue-head indexes and visited policies for repeat traversal.
 
@@ -798,7 +806,7 @@ design issues are:
 
 - label-bearing and property projections still perform per-result point reads;
 - mutable, dynamically typed pipelines and dynamically typed projections;
-- no context-aware or streaming terminal execution;
+- no context-aware collection or cancellation inside every iterator loop;
 - incomplete repeat validation, cycle policy, queue efficiency, and paths;
 - inconsistent iterator seek/valid and corruption semantics;
 - public exposure of Pebble types and mutable caller-owned Pebble options;

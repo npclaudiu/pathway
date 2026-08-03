@@ -175,6 +175,23 @@ adjacency range for each unique label. Multiple labels are returned in
 deterministic adjacency-key order, not caller argument order. Omitting labels
 scans every incident edge for that direction.
 
+For a result set that should not be collected in memory, stream it with `Each`:
+
+```go
+err := g.V().HasLabel("Person").Each(ctx, func(result interface{}) error {
+    person := result.(pathway.Node)
+    fmt.Printf("- %v\n", person.ID)
+    return nil
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+The callback receives the same result types as `ToList`. Returning an error
+stops the traversal early, and cancelling `ctx` returns `context.Canceled`.
+Pathway closes the iterator stack and read transaction on every exit path.
+
 ### 4.2 Friends of Friends (2-Hop)
 
 Find people Alice follows, and then who *they* follow.

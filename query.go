@@ -290,96 +290,139 @@ func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
 
 // Terminal Steps
 
-// ToList executes the traversal pipeline and returns materialized results.
-// Unprojected nodes and edges are returned as Node and Edge values;
-// projections retain their documented result types.
-func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
+// Each executes the traversal pipeline and calls yield once for every result.
+// It streams results without retaining them, so memory use does not grow with
+// the traversal size. Returning an error from yield stops iteration; the error
+// is returned after all traversal resources have been closed. Cancellation is
+// checked while building and advancing the traversal.
+//
+// Unprojected nodes and edges are passed as Node and Edge values; projections
+// retain their documented result types. The values passed to yield own their
+// data and remain valid after yield returns.
+func (tp *TraversalPipeline) Each(ctx context.Context, yield func(interface{}) error) (err error) {
+	return tp.each(ctx, yield, nil)
+}
+
+func (tp *TraversalPipeline) each(
+	ctx context.Context,
+	yield func(interface{}) error,
+	iteratorReady func(Iterator),
+) (err error) {
 	if tp.db == nil {
-		return nil, ErrInvalidDatabase
+		return ErrInvalidDatabase
+	}
+	if ctx == nil {
+		return errors.New("pathway: nil traversal context")
+	}
+	if yield == nil {
+		return errors.New("pathway: nil traversal callback")
 	}
 
-	// Observability Hooks
-	// We construct a query descriptor (placeholder for now)
 	queryDesc := "Traversal Query"
-	ctx := context.Background() // TODO: Accept context in ToList? Spec suggests Context support (Sec 3). The method signature currently is ToList() without args.
-	// For now we use Background.
-
 	if tp.db.options.OnQueryStart != nil {
 		tp.db.options.OnQueryStart(ctx, queryDesc)
 	}
 	start := time.Now()
-
 	defer func() {
 		if tp.db.options.OnQueryEnd != nil {
 			tp.db.options.OnQueryEnd(ctx, queryDesc, time.Since(start), err)
 		}
 	}()
 
-	// 1. Start Read Tx
-	// ToList executions are typically read-only.
-	tx, txErr := tp.db.NewReadTx(ctx)
-	if txErr != nil {
-		err = txErr
-		return nil, err
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+
+	tx, err := tp.db.NewReadTx(ctx)
+	if err != nil {
+		return err
 	}
 	defer func() { err = errors.Join(err, tx.Close()) }()
 
-	// 2. Execute Pipeline
-	var iter Iterator = nil // Start null
-	for _, step := range tp.steps {
-		iter = step(tx, iter)
-		if iter == nil {
-			err = errors.New("pipeline step returned nil iterator")
-			return nil, err
+	var iter Iterator
+	defer func() {
+		if iter != nil {
+			err = errors.Join(err, iter.Close())
 		}
-	}
-	defer func() { err = errors.Join(err, iter.Close()) }()
+	}()
 
-	resultCapacity := 16
-	if hinted, ok := iter.(resultSizeHinter); ok {
-		if hint := hinted.ResultSizeHint(); hint > 0 {
-			resultCapacity = hint
+	for _, step := range tp.steps {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		next := step(tx, iter)
+		if next == nil {
+			return errors.New("pipeline step returned nil iterator")
+		}
+		iter = next
+	}
+	if iter == nil {
+		return errors.New("pipeline contains no traversal steps")
+	}
+	if iteratorReady != nil {
+		iteratorReady(iter)
+	}
+
+	for {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if !iter.Next() {
+			break
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+
+		var result interface{}
+		switch current := iter.(type) {
+		case resultIterator:
+			result, err = current.Result()
+		case NodeIterator:
+			var id uuid.UUID
+			var label string
+			id, label, err = current.Node()
+			result = Node{ID: id, Label: label}
+		case EdgeIterator:
+			var id, other uuid.UUID
+			var label string
+			id, other, label, err = current.Edge()
+			result = Edge{ID: id, Other: other, Label: label}
+		default:
+			result = append([]byte(nil), iter.Key()...)
+		}
+		if err != nil {
+			return err
+		}
+		if err = yield(result); err != nil {
+			return err
 		}
 	}
-	appendResult := func(value interface{}) {
+
+	if err = iter.Error(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// ToList executes the traversal pipeline and returns materialized results.
+// Unprojected nodes and edges are returned as Node and Edge values;
+// projections retain their documented result types. To consume large results
+// with bounded memory, use Each.
+func (tp *TraversalPipeline) ToList() (results []interface{}, err error) {
+	resultCapacity := 16
+	err = tp.each(context.Background(), func(value interface{}) error {
 		if results == nil {
 			results = make([]interface{}, 0, resultCapacity)
 		}
 		results = append(results, value)
-	}
-
-	// 3. Drain Iterator
-	for iter.Next() {
-		// Extract value
-		if ri, ok := iter.(resultIterator); ok {
-			value, e := ri.Result()
-			if e != nil {
-				err = e
-				return nil, err
+		return nil
+	}, func(iter Iterator) {
+		if hinted, ok := iter.(resultSizeHinter); ok {
+			if hint := hinted.ResultSizeHint(); hint > 0 {
+				resultCapacity = hint
 			}
-			appendResult(value)
-		} else if ni, ok := iter.(NodeIterator); ok {
-			id, lbl, e := ni.Node()
-			if e != nil {
-				err = e
-				return nil, err
-			}
-			appendResult(Node{ID: id, Label: lbl})
-		} else if ei, ok := iter.(EdgeIterator); ok {
-			id, other, lbl, e := ei.Edge()
-			if e != nil {
-				err = e
-				return nil, err
-			}
-			appendResult(Edge{ID: id, Other: other, Label: lbl})
-		} else {
-			appendResult(append([]byte(nil), iter.Key()...))
 		}
-	}
-
-	if iter.Error() != nil {
-		err = iter.Error()
-	}
-
+	})
 	return results, err
 }

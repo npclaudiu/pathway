@@ -48,6 +48,7 @@ import "github.com/npclaudiu/pathway"
 - [type Step](<#Step>)
 - [type Traversal](<#Traversal>)
 - [type TraversalPipeline](<#TraversalPipeline>)
+  - [func \(tp \*TraversalPipeline\) Each\(ctx context.Context, yield func\(interface\{\}\) error\) \(err error\)](<#TraversalPipeline.Each>)
   - [func \(tp \*TraversalPipeline\) Emit\(\) \*TraversalPipeline](<#TraversalPipeline.Emit>)
   - [func \(tp \*TraversalPipeline\) HasLabel\(labels ...string\) \*TraversalPipeline](<#TraversalPipeline.HasLabel>)
   - [func \(tp \*TraversalPipeline\) IDs\(\) \*TraversalPipeline](<#TraversalPipeline.IDs>)
@@ -625,6 +626,17 @@ type TraversalPipeline struct {
 }
 ```
 
+<a name="TraversalPipeline.Each"></a>
+### func \(\*TraversalPipeline\) [Each](<https://github.com/npclaudiu/pathway/blob/main/query.go#L302>)
+
+```go
+func (tp *TraversalPipeline) Each(ctx context.Context, yield func(interface{}) error) (err error)
+```
+
+Each executes the traversal pipeline and calls yield once for every result. It streams results without retaining them, so memory use does not grow with the traversal size. Returning an error from yield stops iteration; the error is returned after all traversal resources have been closed. Cancellation is checked while building and advancing the traversal.
+
+Unprojected nodes and edges are passed as Node and Edge values; projections retain their documented result types. The values passed to yield own their data and remain valid after yield returns.
+
 <a name="TraversalPipeline.Emit"></a>
 ### func \(\*TraversalPipeline\) [Emit](<https://github.com/npclaudiu/pathway/blob/main/query.go#L244>)
 
@@ -721,13 +733,13 @@ func (tp *TraversalPipeline) Times(n int) *TraversalPipeline
 Times terminates a Repeat loop after a fixed number of iterations.
 
 <a name="TraversalPipeline.ToList"></a>
-### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L296>)
+### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L412>)
 
 ```go
 func (tp *TraversalPipeline) ToList() (results []interface{}, err error)
 ```
 
-ToList executes the traversal pipeline and returns materialized results. Unprojected nodes and edges are returned as Node and Edge values; projections retain their documented result types.
+ToList executes the traversal pipeline and returns materialized results. Unprojected nodes and edges are returned as Node and Edge values; projections retain their documented result types. To consume large results with bounded memory, use Each.
 
 <a name="TraversalPipeline.Until"></a>
 ### func \(\*TraversalPipeline\) [Until](<https://github.com/npclaudiu/pathway/blob/main/query.go#L223>)

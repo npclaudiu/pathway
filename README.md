@@ -177,6 +177,20 @@ Labels passed to `Out` or `In` use exact Pebble ranges instead of scanning
 unrelated adjacency entries; multi-label results have deterministic storage-key
 order regardless of argument order.
 
+Large traversals can be consumed with bounded memory by using `Each`:
+
+```go
+err := g.V().HasLabel("Person").Each(ctx, func(result interface{}) error {
+	person := result.(pathway.Node)
+	fmt.Println(person.ID)
+	return nil
+})
+```
+
+`Each` propagates its context to query hooks and stops on cancellation or when
+the callback returns an error. In every case, it closes the traversal iterators
+and read transaction before returning.
+
 ## Documentation
 
 For a practical guide on data modeling and graph queries, refer to the [Social

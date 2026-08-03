@@ -2,11 +2,23 @@ package pathway
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+type closeTrackingNodeIterator struct {
+	NodeIterator
+	closed bool
+}
+
+func (it *closeTrackingNodeIterator) Close() error {
+	it.closed = true
+	return it.NodeIterator.Close()
+}
 
 func TestQuery_V_InvalidUUID(t *testing.T) {
 	db, _ := Open(":memory:")
@@ -41,6 +53,143 @@ func TestQuery_ToList_NilDatabase(t *testing.T) {
 	_, err := q.ToList()
 	if err != ErrInvalidDatabase {
 		t.Errorf("expected ErrInvalidDatabase, got %v", err)
+	}
+}
+
+func TestQuery_EachStreamsResults(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	const nodeCount = 1_000
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		for range nodeCount {
+			if err := tx.PutNode(uuid.New(), "Node"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	err = NewTraversalSource(db).V().Each(context.Background(), func(result interface{}) error {
+		if _, ok := result.(Node); !ok {
+			t.Fatalf("result type = %T, want pathway.Node", result)
+		}
+		count++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != nodeCount {
+		t.Fatalf("callback count = %d, want %d", count, nodeCount)
+	}
+}
+
+func TestQuery_EachCallbackErrorClosesIteratorChain(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		for range 3 {
+			if err := tx.PutNode(uuid.New(), "Node"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var tracked *closeTrackingNodeIterator
+	pipeline := &TraversalPipeline{
+		db: db,
+		steps: []Step{
+			func(tx *Tx, _ Iterator) Iterator {
+				tracked = &closeTrackingNodeIterator{NodeIterator: tx.ScanNodes()}
+				return tracked
+			},
+			func(_ *Tx, previous Iterator) Iterator {
+				return newIDIterator(previous)
+			},
+		},
+	}
+
+	stopErr := errors.New("stop streaming")
+	callbacks := 0
+	err = pipeline.Each(context.Background(), func(interface{}) error {
+		callbacks++
+		return stopErr
+	})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("Each error = %v, want %v", err, stopErr)
+	}
+	if callbacks != 1 {
+		t.Fatalf("callback count = %d, want 1", callbacks)
+	}
+	if tracked == nil || !tracked.closed {
+		t.Fatal("callback termination did not close the iterator chain")
+	}
+}
+
+func TestQuery_EachPropagatesCancellationAndContextToHooks(t *testing.T) {
+	type contextKey struct{}
+	var startContext, endContext context.Context
+	var endErr error
+	db, err := OpenWithOptions(":memory:", Options{
+		OnQueryStart: func(ctx context.Context, _ string) {
+			startContext = ctx
+		},
+		OnQueryEnd: func(ctx context.Context, _ string, _ time.Duration, err error) {
+			endContext = ctx
+			endErr = err
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		for range 3 {
+			if err := tx.PutNode(uuid.New(), "Node"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "caller"))
+	callbacks := 0
+	err = NewTraversalSource(db).V().Each(ctx, func(interface{}) error {
+		callbacks++
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Each error = %v, want context.Canceled", err)
+	}
+	if callbacks != 1 {
+		t.Fatalf("callback count = %d, want 1", callbacks)
+	}
+	if startContext != ctx || endContext != ctx {
+		t.Fatal("query hooks did not receive the caller context")
+	}
+	if startContext.Value(contextKey{}) != "caller" {
+		t.Fatal("query hook context lost caller values")
+	}
+	if !errors.Is(endErr, context.Canceled) {
+		t.Fatalf("OnQueryEnd error = %v, want context.Canceled", endErr)
 	}
 }
 
