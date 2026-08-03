@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -142,6 +143,28 @@ func (ts *TraversalSource) VExternal(ids ...ExternalID) (*TraversalPipeline, err
 // It takes a transaction context and a previous iterator, and returns a new iterator.
 type Step func(tx *Tx, prev Iterator) Iterator
 
+// RepeatVisitMode controls how Repeat treats a node reached through more than
+// one traversal path.
+type RepeatVisitMode uint8
+
+const (
+	// RepeatDeduplicateNodes visits each node UUID at most once. It is the
+	// default and produces one breadth-first result for converging paths.
+	RepeatDeduplicateNodes RepeatVisitMode = iota
+	// RepeatPathSensitive preserves distinct simple paths to the same node.
+	// Revisiting a node already present in the current path is suppressed, so
+	// cycles remain finite.
+	RepeatPathSensitive
+)
+
+func (mode RepeatVisitMode) valid() bool {
+	return mode == RepeatDeduplicateNodes || mode == RepeatPathSensitive
+}
+
+type repeatProgram struct {
+	steps []Step
+}
+
 // RepeatConfig holds configuration for repeat steps (loops).
 type RepeatConfig struct {
 	sub            func(*TraversalPipeline) *TraversalPipeline
@@ -152,6 +175,35 @@ type RepeatConfig struct {
 	emit           bool
 	emitSet        bool
 	allowUnbounded bool
+	visitMode      RepeatVisitMode
+	visitModeSet   bool
+	compileOnce    sync.Once
+	program        *repeatProgram
+	compileErr     error
+}
+
+func (repeat *RepeatConfig) compile(db *Database) (*repeatProgram, error) {
+	repeat.compileOnce.Do(func() {
+		body := &TraversalPipeline{db: db}
+		compiled := repeat.sub(body)
+		if compiled == nil {
+			repeat.compileErr = fmt.Errorf("%w: Repeat body returned a nil pipeline", ErrInvalidRepeat)
+			return
+		}
+		if compiled != body {
+			repeat.compileErr = fmt.Errorf(
+				"%w: Repeat body must extend and return its input pipeline",
+				ErrInvalidRepeat,
+			)
+			return
+		}
+		if err := compiled.validateRepeatConfiguration(); err != nil {
+			repeat.compileErr = err
+			return
+		}
+		repeat.program = &repeatProgram{steps: append([]Step(nil), compiled.steps...)}
+	})
+	return repeat.program, repeat.compileErr
 }
 
 // TraversalPipeline represents a chain of query steps.
@@ -194,6 +246,12 @@ func (tp *TraversalPipeline) validateRepeatConfiguration() error {
 				"%w: Repeat requires Until, Times, or AllowUnboundedRepeat",
 				ErrInvalidRepeat,
 			)
+		}
+		if !repeat.visitMode.valid() {
+			return fmt.Errorf("%w: unsupported repeat visit mode %d", ErrInvalidRepeat, repeat.visitMode)
+		}
+		if _, err := repeat.compile(tp.db); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -288,8 +346,11 @@ func (tp *TraversalPipeline) Until(pred NodePredicate) *TraversalPipeline {
 
 // Recursion Steps
 
-// Repeat repeats the provided sub-traversal. Every Repeat must be terminated
-// with Until or Times unless AllowUnboundedRepeat is explicitly selected.
+// Repeat compiles and repeatedly executes the provided sub-traversal in
+// breadth-first order. The body must extend and return its input pipeline.
+// Every Repeat must be terminated with Until or Times unless
+// AllowUnboundedRepeat is explicitly selected. Nodes are deduplicated by UUID
+// unless WithRepeatVisitMode selects RepeatPathSensitive.
 //
 // Usage:
 //
@@ -351,11 +412,34 @@ func (tp *TraversalPipeline) Emit() *TraversalPipeline {
 	return tp
 }
 
+// WithRepeatVisitMode selects how the active Repeat handles converging paths.
+// RepeatDeduplicateNodes is the default and visits each UUID once;
+// RepeatPathSensitive preserves distinct simple paths while suppressing cycles
+// within each path. It must immediately follow Repeat or another repeat
+// modifier and may be specified only once.
+func (tp *TraversalPipeline) WithRepeatVisitMode(mode RepeatVisitMode) *TraversalPipeline {
+	repeat := tp.repeatForModifier("WithRepeatVisitMode")
+	if repeat == nil {
+		return tp
+	}
+	if repeat.visitModeSet {
+		tp.setRepeatError("WithRepeatVisitMode may be specified only once")
+		return tp
+	}
+	if !mode.valid() {
+		tp.setRepeatError("unsupported repeat visit mode %d", mode)
+		return tp
+	}
+	repeat.visitMode = mode
+	repeat.visitModeSet = true
+	return tp
+}
+
 // AllowUnboundedRepeat explicitly permits the active Repeat to run without an
 // Until predicate or Times limit. It must immediately follow Repeat or another
-// repeat modifier and cannot be combined with a termination policy. Callers
-// should execute unbounded repeats with a cancellable context or stopping
-// callback.
+// repeat modifier and cannot be combined with a termination policy. Both visit
+// modes suppress cycles, but callers should still use a cancellable context for
+// large traversals.
 func (tp *TraversalPipeline) AllowUnboundedRepeat() *TraversalPipeline {
 	repeat := tp.repeatForModifier("AllowUnboundedRepeat")
 	if repeat == nil {

@@ -679,35 +679,44 @@ one materialized result does not mutate another result. The `dir` field on
 
 `Repeat` stores a mutable `RepeatConfig` captured by the pipeline step and
 registers it with the traversal for execution-time validation. `Until`,
-`Times`, `Emit`, and `AllowUnboundedRepeat` may be chained in any order while
-that repeat is active. Every navigation, filtering, projection, or subsequent
-repeat step closes the active modifier window consistently. A modifier outside
-that window, a duplicate modifier, a nil body or predicate, a non-positive
-iteration count, or an unbounded opt-in combined with a termination policy is
-recorded as `ErrInvalidRepeat` rather than ignored.
+`Times`, `Emit`, `WithRepeatVisitMode`, and `AllowUnboundedRepeat` may be chained
+in any order while that repeat is active. Every navigation, filtering,
+projection, or subsequent repeat step closes the active modifier window
+consistently. A modifier outside that window, a duplicate modifier, a nil body
+or predicate, a non-positive iteration count, an invalid visit mode, or an
+unbounded opt-in combined with a termination policy is recorded as
+`ErrInvalidRepeat` rather than ignored.
 
 Before opening a read transaction, terminal execution validates that each
 repeat has a non-nil body and either a non-nil `Until`, a positive `Times`, or
 an explicit `AllowUnboundedRepeat`. `Emit` only controls result emission and is
-not a termination policy. Repeat bodies are validated after construction too,
-including nested repeats and nil returned pipelines. Intentionally unbounded
-repeats remain interruptible through traversal context cancellation or a
-stopping streaming callback.
+not a termination policy. A repeat body must extend and return the pipeline it
+receives. Validation compiles that body once into an immutable step sequence,
+recursively validates nested repeats, and caches either the program or its
+error with `sync.Once`. Reusing a pipeline does not rebuild the repeat body.
 
-`repeatIterator` performs breadth-first expansion:
+`repeatIterator` executes the compiled program in breadth-first order:
 
-- it first drains the upstream node iterator into an in-memory queue;
-- it removes the queue head by reslicing;
-- it builds and executes the repeat sub-pipeline separately for each traverser;
-- it enqueues returned nodes with incremented depth;
+- it drains upstream nodes into a FIFO ring queue;
+- each popped slot is zeroed immediately so it cannot retain consumed paths;
+- it executes the compiled steps against a lightweight one-node input iterator;
+- it enqueues accepted nodes with incremented depth and full parent path state;
 - termination is checked when a traverser is dequeued.
 
-There is no visited set or cycle detection. An explicitly unbounded repeat, or
-one whose `Until` predicate is unreachable, can run forever on a cyclic graph.
-Queue reslicing retains backing memory, and per-traverser pipeline construction
-is expensive. Repeat path propagation is also incomplete because each
-sub-traversal starts from a fresh fixed-node path rather than explicitly
-carrying the entire parent path.
+`RepeatDeduplicateNodes` is the zero-value default. A repeat-wide UUID set
+admits each node once, so converging paths collapse to the first breadth-first
+arrival. `RepeatPathSensitive` retains separate traversers for converging and
+parallel-edge paths, but a persistent ancestry chain rejects a node already in
+that path. Both policies therefore suppress cyclic expansion, even without a
+depth or predicate limit. The global visited set is proportional to unique
+nodes; path-sensitive ancestry is shared by common prefixes. Queue storage is
+proportional to the largest active frontier, and only live slots retain path or
+ancestry data.
+
+Repeat now carries the parent path into its compiled body, so `Path` after a
+repeat includes every prior node and edge. Path slices are still constructed
+for traversals that never request `Path`; ITR-005 tracks eliminating those
+allocations.
 
 ## OGM and predicates
 
@@ -775,6 +784,7 @@ The principal costs and write amplification are architectural, not incidental:
 | Label-bearing one-hop traversal | adjacency scan plus one lazy node point read per edge |
 | Label-filtered adjacency | one exact bounded scan per unique requested label |
 | `Values` | one property point read and full decode per entity |
+| Repeat BFS | one compiled step sequence, per-frontier iterator stacks, queue, and visit-policy state |
 | Streaming terminal | snapshot lifecycle and typed value boxing; no result collection |
 | Collection terminal | snapshot lifecycle, one typed or dynamic result slice, and value boxing |
 
@@ -782,14 +792,15 @@ Write benchmarks exercise both synchronous and relaxed durability, with memory
 and disk backends under each mode. The benchmark harness seeds deterministic
 adjacency layers, validates cardinality outside timed regions, and separately
 measures scans and exact indexes. See [benchmarks.md](benchmarks.md) before
-interpreting results.
+interpreting results. Repeat benchmarks cover a cycle, a branching tree, and a
+high-depth chain on both memory and disk backends.
 
 Likely optimization directions must preserve invariants:
 
 - batching label reads when label-bearing nodes must be materialized;
 - lower cancellation latency for caller code that blocks inside hooks or predicates;
 - fewer property-codec allocations and redundant canonicalization work;
-- queue-head indexes and visited policies for repeat traversal.
+- allocation-free path elision when a traversal does not request `Path`.
 
 ## Safe extension playbooks
 

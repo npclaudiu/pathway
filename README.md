@@ -1,6 +1,7 @@
 # Pathway
 
-Pathway is an experimental Go library for an embedded, persistent graph database
+Pathway is a vibe coding experiment aiming to produce a Go library for an
+embedded, persistent graph database
 based on the [Pebble](https://github.com/cockroachdb/pebble) key-value database.
 It provides a fluid, Gremlin-like query interface for natural graph traversals.
 
@@ -187,8 +188,16 @@ Every `Repeat` must be followed immediately by a positive `Times`, a non-nil
 combined and can appear in any order, but they cannot be added after another
 traversal or projection step. Invalid configurations return `ErrInvalidRepeat`
 when the traversal executes. `Emit` controls intermediate results and does not
-terminate a repeat. Run intentionally unbounded repeats with a cancellable
-context or a streaming callback that stops the traversal.
+terminate a repeat.
+
+Repeat bodies are compiled once and run breadth-first. The default
+`RepeatDeduplicateNodes` mode visits each UUID once, so converging paths produce
+one result. Use `WithRepeatVisitMode(RepeatPathSensitive)` to preserve distinct
+simple paths to the same node. Both modes suppress cycles: node mode uses a
+repeat-wide visited set, while path mode rejects a node already in that
+traverser's ancestry. `AllowUnboundedRepeat` therefore means no explicit depth
+or predicate limit, not that cycles are revisited forever. Use a cancellable
+context for large traversals.
 
 `V` accepts `uuid.UUID` values directly and does not parse them. When IDs arrive
 as text, use `VStrings`; it returns `ErrInvalidNodeID` for any malformed value

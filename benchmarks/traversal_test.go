@@ -183,3 +183,134 @@ func BenchmarkTraverseOutByLabelHighDegree(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkRepeatBFS(b *testing.B) {
+	const (
+		cycleNodes    = 128
+		branchDepth   = 6
+		highDepthHops = 255
+	)
+	RunBenchmark(b, func(b *testing.B, db *pathway.Database) {
+		cycleStart, cycleCount := seedCycle(b, db, cycleNodes)
+		branchStart, branchCount := seedBinaryTree(b, db, branchDepth)
+		deepStart := seedChain(b, db, highDepthHops)
+		g := pathway.NewTraversalSource(db)
+
+		benchmarks := []struct {
+			name     string
+			pipeline *pathway.TraversalPipeline
+			want     int
+		}{
+			{
+				name: "Cycle",
+				pipeline: g.V(cycleStart).
+					Repeat(func(p *pathway.TraversalPipeline) *pathway.TraversalPipeline { return p.Out("CYCLE") }).
+					Emit().
+					AllowUnboundedRepeat(),
+				want: cycleCount,
+			},
+			{
+				name: "Branching",
+				pipeline: g.V(branchStart).
+					Repeat(func(p *pathway.TraversalPipeline) *pathway.TraversalPipeline { return p.Out("BRANCH") }).
+					Times(branchDepth).
+					Emit(),
+				want: branchCount,
+			},
+			{
+				name: "HighDepth",
+				pipeline: g.V(deepStart).
+					Repeat(func(p *pathway.TraversalPipeline) *pathway.TraversalPipeline { return p.Out("DEEP") }).
+					Times(highDepthHops),
+				want: 1,
+			},
+		}
+
+		for _, benchmark := range benchmarks {
+			b.Run(benchmark.name, func(b *testing.B) {
+				validation, err := benchmark.pipeline.ToNodesContext(b.Context())
+				if err != nil || len(validation) != benchmark.want {
+					b.Fatalf("validate repeat: len=%d, want=%d, err=%v", len(validation), benchmark.want, err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					results, err := benchmark.pipeline.ToNodesContext(b.Context())
+					if err != nil || len(results) != benchmark.want {
+						b.Fatalf("repeat traversal: len=%d, want=%d, err=%v", len(results), benchmark.want, err)
+					}
+				}
+			})
+		}
+	})
+}
+
+func seedCycle(b testing.TB, db *pathway.Database, count int) (uuid.UUID, int) {
+	b.Helper()
+	nodes := make([]uuid.UUID, count)
+	if err := db.BulkUpdate(context.Background(), func(writer *pathway.BulkWriter) error {
+		for i := range nodes {
+			nodes[i] = uuid.New()
+			if err := writer.PutNode(nodes[i], "Cycle"); err != nil {
+				return err
+			}
+		}
+		for i := range nodes {
+			if _, err := writer.PutEdge(nodes[i], nodes[(i+1)%len(nodes)], "CYCLE"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		b.Fatalf("seed cycle: %v", err)
+	}
+	return nodes[0], len(nodes)
+}
+
+func seedBinaryTree(b testing.TB, db *pathway.Database, depth int) (uuid.UUID, int) {
+	b.Helper()
+	count := (1 << (depth + 1)) - 1
+	nodes := make([]uuid.UUID, count)
+	if err := db.BulkUpdate(context.Background(), func(writer *pathway.BulkWriter) error {
+		for i := range nodes {
+			nodes[i] = uuid.New()
+			if err := writer.PutNode(nodes[i], "Branch"); err != nil {
+				return err
+			}
+		}
+		for parent := 0; 2*parent+1 < len(nodes); parent++ {
+			if _, err := writer.PutEdge(nodes[parent], nodes[2*parent+1], "BRANCH"); err != nil {
+				return err
+			}
+			if _, err := writer.PutEdge(nodes[parent], nodes[2*parent+2], "BRANCH"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		b.Fatalf("seed binary tree: %v", err)
+	}
+	return nodes[0], len(nodes)
+}
+
+func seedChain(b testing.TB, db *pathway.Database, hops int) uuid.UUID {
+	b.Helper()
+	nodes := make([]uuid.UUID, hops+1)
+	if err := db.BulkUpdate(context.Background(), func(writer *pathway.BulkWriter) error {
+		for i := range nodes {
+			nodes[i] = uuid.New()
+			if err := writer.PutNode(nodes[i], "Depth"); err != nil {
+				return err
+			}
+		}
+		for i := 0; i < len(nodes)-1; i++ {
+			if _, err := writer.PutEdge(nodes[i], nodes[i+1], "DEEP"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		b.Fatalf("seed chain: %v", err)
+	}
+	return nodes[0]
+}

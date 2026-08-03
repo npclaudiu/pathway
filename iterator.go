@@ -2,7 +2,6 @@ package pathway
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/npclaudiu/pathway/internal/encoding"
@@ -811,18 +810,109 @@ func (it *pathIterator) ResultSizeHint() int {
 	return 0
 }
 
-// repeatIterator implements BFS traversal
-type traverser struct {
-	node  Node
-	path  Path
-	depth int
+// repeatIterator executes a compiled repeat body in breadth-first order.
+type repeatAncestry struct {
+	node   uuid.UUID
+	parent *repeatAncestry
 }
+
+func (ancestry *repeatAncestry) contains(id uuid.UUID) bool {
+	for current := ancestry; current != nil; current = current.parent {
+		if current.node == id {
+			return true
+		}
+	}
+	return false
+}
+
+type traverser struct {
+	node     Node
+	path     Path
+	depth    int
+	ancestry *repeatAncestry
+}
+
+// traverserQueue is a FIFO ring. Popped slots are zeroed so paths and ancestry
+// chains are retained only by the active frontier and current result.
+type traverserQueue struct {
+	items []traverser
+	head  int
+	size  int
+}
+
+func (queue *traverserQueue) push(item traverser) {
+	if queue.size == len(queue.items) {
+		capacity := len(queue.items) * 2
+		if capacity == 0 {
+			capacity = 8
+		}
+		items := make([]traverser, capacity)
+		for i := range queue.size {
+			items[i] = queue.items[(queue.head+i)%len(queue.items)]
+		}
+		queue.items = items
+		queue.head = 0
+	}
+	index := (queue.head + queue.size) % len(queue.items)
+	queue.items[index] = item
+	queue.size++
+}
+
+func (queue *traverserQueue) pop() (traverser, bool) {
+	if queue.size == 0 {
+		return traverser{}, false
+	}
+	item := queue.items[queue.head]
+	queue.items[queue.head] = traverser{}
+	queue.head = (queue.head + 1) % len(queue.items)
+	queue.size--
+	if queue.size == 0 {
+		queue.head = 0
+	}
+	return item, true
+}
+
+type repeatInputIterator struct {
+	item     traverser
+	advanced bool
+	valid    bool
+}
+
+func (it *repeatInputIterator) Next() bool {
+	it.valid = false
+	if it.advanced {
+		return false
+	}
+	it.advanced = true
+	it.valid = true
+	return true
+}
+
+func (it *repeatInputIterator) Node() (uuid.UUID, string, error) {
+	if !it.valid {
+		return uuid.Nil, "", ErrInvalidIteratorState
+	}
+	return it.item.node.ID, it.item.node.Label, nil
+}
+
+func (it *repeatInputIterator) nodeID() (uuid.UUID, error) {
+	if !it.valid {
+		return uuid.Nil, ErrInvalidIteratorState
+	}
+	return it.item.node.ID, nil
+}
+
+func (it *repeatInputIterator) Close() error { return nil }
+func (it *repeatInputIterator) Error() error { return nil }
+func (it *repeatInputIterator) path() Path   { return it.item.path }
 
 type repeatIterator struct {
 	tx      *Tx
 	prev    Iterator
 	conf    *RepeatConfig
-	queue   []traverser
+	program *repeatProgram
+	queue   traverserQueue
+	visited map[uuid.UUID]struct{}
 	inited  bool
 	valid   bool
 	curItem traverser
@@ -830,7 +920,8 @@ type repeatIterator struct {
 }
 
 func newRepeatIterator(tx *Tx, prev Iterator, conf *RepeatConfig) *repeatIterator {
-	return &repeatIterator{tx: tx, prev: prev, conf: conf}
+	program, err := conf.compile(tx.db)
+	return &repeatIterator{tx: tx, prev: prev, conf: conf, program: program, err: err}
 }
 
 func (it *repeatIterator) Next() bool {
@@ -839,39 +930,16 @@ func (it *repeatIterator) Next() bool {
 		return false
 	}
 	if !it.inited {
-		// Drain prev into queue
-		nodes, ok := it.prev.(NodeIterator)
-		if !ok {
-			it.err = errors.New("pipeline type mismatch: repeat requires nodes")
+		if !it.initialize() {
 			return false
 		}
-		for it.prev.Next() {
-			if it.contextCanceled() {
-				return false
-			}
-			id, lbl, err := nodes.Node()
-			if err != nil {
-				it.err = err
-				return false
-			}
-			it.queue = append(it.queue, traverser{
-				node: Node{ID: id, Label: lbl}, path: currentPath(it.prev), depth: 0,
-			})
-		}
-		if err := it.prev.Error(); err != nil {
-			it.err = err
-			return false
-		}
-		it.inited = true
 	}
 
-	// BFS Loop
-	for len(it.queue) > 0 {
+	for it.queue.size > 0 {
 		if it.contextCanceled() {
 			return false
 		}
-		cur := it.queue[0]
-		it.queue = it.queue[1:]
+		cur, _ := it.queue.pop()
 
 		// Check termination
 		stop := false
@@ -890,72 +958,8 @@ func (it *repeatIterator) Next() bool {
 			return true
 		}
 
-		// Recurse
-		startIter := &fixedNodeIterator{
-			tx:  it.tx,
-			ids: []uuid.UUID{cur.node.ID},
-			idx: -1,
-		}
-
-		tempTP := &TraversalPipeline{db: it.tx.db, steps: []Step{
-			func(_ *Tx, _ Iterator) Iterator { return startIter },
-		}}
-		outTP := it.conf.sub(tempTP)
-		if outTP == nil {
-			it.err = fmt.Errorf("%w: Repeat body returned a nil pipeline", ErrInvalidRepeat)
+		if !it.expand(cur) {
 			return false
-		}
-		if err := outTP.validateRepeatConfiguration(); err != nil {
-			it.err = err
-			return false
-		}
-
-		var iter Iterator
-		for _, step := range outTP.steps {
-			if it.contextCanceled() {
-				if iter != nil {
-					it.err = errors.Join(it.err, iter.Close())
-				}
-				return false
-			}
-			next := step(it.tx, iter)
-			if next == nil {
-				it.err = errors.New("repeat pipeline step returned nil iterator")
-				if iter != nil {
-					it.err = errors.Join(it.err, iter.Close())
-				}
-				return false
-			}
-			iter = next
-		}
-
-		if iter != nil {
-			for iter.Next() {
-				if it.contextCanceled() {
-					it.err = errors.Join(it.err, iter.Close())
-					return false
-				}
-				nodes, ok := iter.(NodeIterator)
-				if !ok {
-					it.err = errors.Join(
-						errors.New("pipeline type mismatch: repeat body must return nodes"),
-						iter.Close(),
-					)
-					return false
-				}
-				nid, nlbl, err := nodes.Node()
-				if err != nil {
-					it.err = errors.Join(err, iter.Close())
-					return false
-				}
-				it.queue = append(it.queue, traverser{
-					node: Node{ID: nid, Label: nlbl}, path: currentPath(iter), depth: cur.depth + 1,
-				})
-			}
-			if err := errors.Join(iter.Error(), iter.Close()); err != nil {
-				it.err = err
-				return false
-			}
 		}
 
 		if it.conf.emit {
@@ -966,6 +970,112 @@ func (it *repeatIterator) Next() bool {
 	}
 
 	return false
+}
+
+func (it *repeatIterator) initialize() bool {
+	nodes, ok := it.prev.(NodeIterator)
+	if !ok {
+		it.err = errors.New("pipeline type mismatch: repeat requires nodes")
+		return false
+	}
+	if it.conf.visitMode == RepeatDeduplicateNodes {
+		it.visited = make(map[uuid.UUID]struct{})
+	}
+	for it.prev.Next() {
+		if it.contextCanceled() {
+			return false
+		}
+		id, label, err := nodes.Node()
+		if err != nil {
+			it.err = err
+			return false
+		}
+		item := traverser{
+			node:  Node{ID: id, Label: label},
+			path:  append(Path(nil), currentPath(it.prev)...),
+			depth: 0,
+		}
+		if it.conf.visitMode == RepeatDeduplicateNodes {
+			if _, exists := it.visited[id]; exists {
+				continue
+			}
+			it.visited[id] = struct{}{}
+		} else {
+			item.ancestry = &repeatAncestry{node: id}
+		}
+		it.queue.push(item)
+	}
+	if err := it.prev.Error(); err != nil {
+		it.err = err
+		return false
+	}
+	it.inited = true
+	return true
+}
+
+func (it *repeatIterator) expand(parent traverser) bool {
+	var iter Iterator = &repeatInputIterator{item: parent}
+	for _, step := range it.program.steps {
+		if it.contextCanceled() {
+			it.err = errors.Join(it.err, iter.Close())
+			return false
+		}
+		next := step(it.tx, iter)
+		if next == nil {
+			it.err = errors.Join(errors.New("repeat pipeline step returned nil iterator"), iter.Close())
+			return false
+		}
+		iter = next
+	}
+
+	nodes, ok := iter.(NodeIterator)
+	if !ok {
+		it.err = errors.Join(
+			errors.New("pipeline type mismatch: repeat body must return nodes"),
+			iter.Close(),
+		)
+		return false
+	}
+	for iter.Next() {
+		if it.contextCanceled() {
+			it.err = errors.Join(it.err, iter.Close())
+			return false
+		}
+		id, label, err := nodes.Node()
+		if err != nil {
+			it.err = errors.Join(err, iter.Close())
+			return false
+		}
+		if !it.enqueueChild(parent, Node{ID: id, Label: label}, currentPath(iter)) {
+			continue
+		}
+	}
+	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
+		it.err = err
+		return false
+	}
+	return true
+}
+
+func (it *repeatIterator) enqueueChild(parent traverser, node Node, path Path) bool {
+	child := traverser{
+		node:  node,
+		path:  append(Path(nil), path...),
+		depth: parent.depth + 1,
+	}
+	if it.conf.visitMode == RepeatDeduplicateNodes {
+		if _, exists := it.visited[node.ID]; exists {
+			return false
+		}
+		it.visited[node.ID] = struct{}{}
+	} else {
+		if parent.ancestry.contains(node.ID) {
+			return false
+		}
+		child.ancestry = &repeatAncestry{node: node.ID, parent: parent.ancestry}
+	}
+	it.queue.push(child)
+	return true
 }
 
 func (it *repeatIterator) contextCanceled() bool {
@@ -991,7 +1101,13 @@ func (it *repeatIterator) nodeID() (uuid.UUID, error) {
 	}
 	return it.curItem.node.ID, nil
 }
-func (it *repeatIterator) Close() error { return it.prev.Close() }
+func (it *repeatIterator) Close() error {
+	it.queue = traverserQueue{}
+	it.visited = nil
+	it.curItem = traverser{}
+	it.program = nil
+	return it.prev.Close()
+}
 func (it *repeatIterator) Error() error { return it.err }
 func (it *repeatIterator) path() Path   { return it.curItem.path }
 

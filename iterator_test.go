@@ -65,6 +65,44 @@ func TestPublicIteratorInterfacesExposeOnlySupportedOperations(t *testing.T) {
 	}
 }
 
+func TestTraverserQueuePreservesFIFOAndReleasesPoppedState(t *testing.T) {
+	var queue traverserQueue
+	for i := range 20 {
+		queue.push(traverser{
+			depth:    i,
+			path:     Path{{Kind: PathNode, ID: uuid.New()}},
+			ancestry: &repeatAncestry{node: uuid.New()},
+		})
+	}
+	for want := range 10 {
+		item, ok := queue.pop()
+		if !ok || item.depth != want {
+			t.Fatalf("pop = (%d, %v), want (%d, true)", item.depth, ok, want)
+		}
+	}
+	for i := 20; i < 30; i++ {
+		queue.push(traverser{
+			depth:    i,
+			path:     Path{{Kind: PathNode, ID: uuid.New()}},
+			ancestry: &repeatAncestry{node: uuid.New()},
+		})
+	}
+	for want := 10; want < 30; want++ {
+		item, ok := queue.pop()
+		if !ok || item.depth != want {
+			t.Fatalf("pop = (%d, %v), want (%d, true)", item.depth, ok, want)
+		}
+	}
+	if _, ok := queue.pop(); ok || queue.size != 0 {
+		t.Fatal("empty queue returned a traverser")
+	}
+	for i, item := range queue.items {
+		if item.path != nil || item.ancestry != nil || item.node.ID != uuid.Nil {
+			t.Fatalf("queue slot %d retains popped traversal state", i)
+		}
+	}
+}
+
 func TestNodeIteratorsLoadLabelsLazily(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {

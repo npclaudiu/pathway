@@ -3,6 +3,7 @@ package pathway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -700,6 +701,17 @@ func TestQuery_RepeatRequiresValidConfiguration(t *testing.T) {
 		{"times without repeat", func() *TraversalPipeline { return g.V().Times(1) }},
 		{"emit without repeat", func() *TraversalPipeline { return g.V().Emit() }},
 		{"allow unbounded without repeat", func() *TraversalPipeline { return g.V().AllowUnboundedRepeat() }},
+		{"visit mode without repeat", func() *TraversalPipeline {
+			return g.V().WithRepeatVisitMode(RepeatPathSensitive)
+		}},
+		{"invalid visit mode", func() *TraversalPipeline {
+			return g.V().Repeat(body).Times(1).WithRepeatVisitMode(RepeatVisitMode(99))
+		}},
+		{"duplicate visit mode", func() *TraversalPipeline {
+			return g.V().Repeat(body).Times(1).
+				WithRepeatVisitMode(RepeatDeduplicateNodes).
+				WithRepeatVisitMode(RepeatPathSensitive)
+		}},
 		{"duplicate until", func() *TraversalPipeline { return g.V().Repeat(body).Until(pred).Until(pred) }},
 		{"duplicate times", func() *TraversalPipeline { return g.V().Repeat(body).Times(1).Times(2) }},
 		{"duplicate emit", func() *TraversalPipeline { return g.V().Repeat(body).Times(1).Emit().Emit() }},
@@ -786,6 +798,7 @@ func TestQuery_RepeatBodyConfigurationIsValidated(t *testing.T) {
 		{"unterminated nested repeat", func(p *TraversalPipeline) *TraversalPipeline {
 			return p.Repeat(func(nested *TraversalPipeline) *TraversalPipeline { return nested.Out() })
 		}},
+		{"unrelated pipeline", func(*TraversalPipeline) *TraversalPipeline { return g.V(id) }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -797,7 +810,7 @@ func TestQuery_RepeatBodyConfigurationIsValidated(t *testing.T) {
 	}
 }
 
-func TestQuery_RepeatAllowsExplicitUnboundedExecution(t *testing.T) {
+func TestQuery_RepeatSafelyExecutesExplicitUnboundedCycle(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -815,7 +828,6 @@ func TestQuery_RepeatAllowsExplicitUnboundedExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stop := errors.New("stop repeat")
 	count := 0
 	err = NewTraversalSource(db).V(id).
 		Repeat(func(p *TraversalPipeline) *TraversalPipeline { return p.Out("LOOP") }).
@@ -823,16 +835,185 @@ func TestQuery_RepeatAllowsExplicitUnboundedExecution(t *testing.T) {
 		AllowUnboundedRepeat().
 		EachNode(context.Background(), func(Node) error {
 			count++
-			if count == 3 {
-				return stop
-			}
 			return nil
 		})
-	if !errors.Is(err, stop) {
-		t.Fatalf("error = %v, want stopping callback error", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if count != 3 {
-		t.Fatalf("emitted %d nodes, want 3", count)
+	if count != 1 {
+		t.Fatalf("emitted %d nodes, want one deduplicated node", count)
+	}
+}
+
+func TestQuery_RepeatVisitModes(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	ids := []uuid.UUID{
+		uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000002"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000003"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000004"),
+	}
+	a, b, c, d := ids[0], ids[1], ids[2], ids[3]
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		for _, id := range ids {
+			if err := tx.PutNode(id, "Node"); err != nil {
+				return err
+			}
+		}
+		for _, endpoints := range [][2]uuid.UUID{{a, b}, {a, c}, {b, d}, {c, d}} {
+			if _, err := tx.PutEdge(endpoints[0], endpoints[1], "NEXT"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	g := NewTraversalSource(db)
+	body := func(p *TraversalPipeline) *TraversalPipeline { return p.Out("NEXT") }
+	deduplicated, err := g.V(a).Repeat(body).Times(2).ToNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Node{{ID: d, Label: "Node"}}; !reflect.DeepEqual(deduplicated, want) {
+		t.Fatalf("node-deduplicated results = %#v, want %#v", deduplicated, want)
+	}
+
+	pathSensitive, err := g.V(a).Repeat(body).
+		WithRepeatVisitMode(RepeatPathSensitive).
+		Times(2).
+		ToNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pathSensitive) != 2 || pathSensitive[0].ID != d || pathSensitive[1].ID != d {
+		t.Fatalf("path-sensitive results = %#v, want two paths to %s", pathSensitive, d)
+	}
+	emitted, err := g.V(a).Repeat(body).
+		WithRepeatVisitMode(RepeatPathSensitive).
+		Times(2).
+		Emit().
+		ToNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []uuid.UUID{a, b, c, d, d}; len(emitted) != len(want) {
+		t.Fatalf("breadth-first results = %#v, want IDs %#v", emitted, want)
+	} else {
+		for i, node := range emitted {
+			if node.ID != want[i] {
+				t.Fatalf("breadth-first result %d = %s, want %s", i, node.ID, want[i])
+			}
+		}
+	}
+
+	paths, err := g.V(a).Repeat(body).
+		WithRepeatVisitMode(RepeatPathSensitive).
+		Times(2).
+		Path().
+		ToPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("path-sensitive paths = %d, want 2", len(paths))
+	}
+	middleNodes := map[uuid.UUID]bool{}
+	for _, path := range paths {
+		if len(path) != 5 || path[0].ID != a || path[4].ID != d {
+			t.Fatalf("repeat path = %#v, want A -> edge -> B/C -> edge -> D", path)
+		}
+		middleNodes[path[2].ID] = true
+	}
+	if !middleNodes[b] || !middleNodes[c] || len(middleNodes) != 2 {
+		t.Fatalf("repeat middle nodes = %v, want B and C", middleNodes)
+	}
+}
+
+func TestQuery_RepeatVisitModesSuppressCycles(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		for _, id := range ids {
+			if err := tx.PutNode(id, "Node"); err != nil {
+				return err
+			}
+		}
+		for i := range ids {
+			if _, err := tx.PutEdge(ids[i], ids[(i+1)%len(ids)], "NEXT"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, mode := range []RepeatVisitMode{RepeatDeduplicateNodes, RepeatPathSensitive} {
+		t.Run(fmt.Sprintf("mode-%d", mode), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			results, err := NewTraversalSource(db).V(ids[0]).
+				Repeat(func(p *TraversalPipeline) *TraversalPipeline { return p.Out("NEXT") }).
+				WithRepeatVisitMode(mode).
+				Emit().
+				AllowUnboundedRepeat().
+				ToNodesContext(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != len(ids) {
+				t.Fatalf("cycle emitted %d nodes, want %d", len(results), len(ids))
+			}
+		})
+	}
+}
+
+func TestQuery_RepeatCompilesBodyOnce(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	a, b := uuid.New(), uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		if err := tx.PutNode(a, "Node"); err != nil {
+			return err
+		}
+		if err := tx.PutNode(b, "Node"); err != nil {
+			return err
+		}
+		_, err := tx.PutEdge(a, b, "NEXT")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled := 0
+	pipeline := NewTraversalSource(db).V(a).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
+		compiled++
+		return p.Out("NEXT")
+	}).Times(1)
+	for range 2 {
+		results, err := pipeline.ToNodes()
+		if err != nil || len(results) != 1 || results[0].ID != b {
+			t.Fatalf("repeat results = %#v, err = %v", results, err)
+		}
+	}
+	if compiled != 1 {
+		t.Fatalf("repeat body compiled %d times, want once", compiled)
 	}
 }
 

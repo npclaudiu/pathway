@@ -264,8 +264,15 @@ A repeat must declare a positive `Times`, a non-nil `Until`, or explicitly call
 `AllowUnboundedRepeat`. `Emit` can be combined with either termination policy
 to include intermediate nodes, but does not terminate the repeat itself.
 Repeat modifiers must remain adjacent to `Repeat`; invalid configurations
-return `ErrInvalidRepeat` when the traversal executes. Use a cancellable
-context or a stopping streaming callback with intentionally unbounded repeats.
+return `ErrInvalidRepeat` when the traversal executes.
+
+Repeat runs breadth-first and deduplicates node UUIDs by default. To keep
+distinct simple paths that converge on the same node, add
+`WithRepeatVisitMode(pathway.RepeatPathSensitive)`. Node-deduplicated mode uses
+one repeat-wide visited set; path-sensitive mode suppresses only nodes already
+in the current ancestry. Both choices stop cyclic expansion, including when
+`AllowUnboundedRepeat` removes the explicit depth or predicate limit. Use a
+cancellable context for large traversals.
 
 ### 4.3 Who Liked Alice's Post? (Incoming Edges)
 
