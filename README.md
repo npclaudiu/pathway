@@ -162,7 +162,7 @@ Pathway currently supports these Gremlin-inspired traversal steps:
 * **Traversal**: `V`, `Out`, `In`
 * **Filtering**: `HasLabel`
 * **Projection**: `IDs`, `Values`, `Path`
-* **Recursion**: `Repeat` with `Times`
+* **Recursion**: `Repeat` with `Until`, `Times`, and `Emit`
 
 `IDs` emits node UUIDs without loading labels, which is useful for high-degree
 traversals. `Values` emits one scalar for each requested property that exists.
@@ -173,6 +173,14 @@ supported scalar, list, or map; collect it with `ToList`.
 Labels passed to `Out` or `In` use exact Pebble ranges instead of scanning
 unrelated adjacency entries; multi-label results have deterministic storage-key
 order regardless of argument order.
+
+Every `Repeat` must be followed immediately by a positive `Times`, a non-nil
+`Until`, or the explicit `AllowUnboundedRepeat` opt-in. Repeat modifiers may be
+combined and can appear in any order, but they cannot be added after another
+traversal or projection step. Invalid configurations return `ErrInvalidRepeat`
+when the traversal executes. `Emit` controls intermediate results and does not
+terminate a repeat. Run intentionally unbounded repeats with a cancellable
+context or a streaming callback that stops the traversal.
 
 `V` accepts `uuid.UUID` values directly and does not parse them. When IDs arrive
 as text, use `VStrings`; it returns `ErrInvalidNodeID` for any malformed value

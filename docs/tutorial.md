@@ -249,6 +249,24 @@ if err != nil {
 }
 ```
 
+The same fixed-depth traversal can use `Repeat`:
+
+```go
+results, err := g.V(aliceID).
+    Repeat(func(p *pathway.TraversalPipeline) *pathway.TraversalPipeline {
+        return p.Out("FOLLOWS")
+    }).
+    Times(2).
+    ToNodes()
+```
+
+A repeat must declare a positive `Times`, a non-nil `Until`, or explicitly call
+`AllowUnboundedRepeat`. `Emit` can be combined with either termination policy
+to include intermediate nodes, but does not terminate the repeat itself.
+Repeat modifiers must remain adjacent to `Repeat`; invalid configurations
+return `ErrInvalidRepeat` when the traversal executes. Use a cancellable
+context or a stopping streaming callback with intentionally unbounded repeats.
+
 ### 4.3 Who Liked Alice's Post? (Incoming Edges)
 
 Traverse backwards using `In()`.

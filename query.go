@@ -144,10 +144,14 @@ type Step func(tx *Tx, prev Iterator) Iterator
 
 // RepeatConfig holds configuration for repeat steps (loops).
 type RepeatConfig struct {
-	sub   func(*TraversalPipeline) *TraversalPipeline
-	until NodePredicate
-	times int
-	emit  bool
+	sub            func(*TraversalPipeline) *TraversalPipeline
+	until          NodePredicate
+	untilSet       bool
+	times          int
+	timesSet       bool
+	emit           bool
+	emitSet        bool
+	allowUnbounded bool
 }
 
 // TraversalPipeline represents a chain of query steps.
@@ -155,6 +159,44 @@ type TraversalPipeline struct {
 	db           *Database
 	steps        []Step
 	activeRepeat *RepeatConfig
+	repeats      []*RepeatConfig
+	buildErr     error
+}
+
+func (tp *TraversalPipeline) closeActiveRepeat() {
+	tp.activeRepeat = nil
+}
+
+func (tp *TraversalPipeline) setRepeatError(format string, args ...any) {
+	if tp.buildErr == nil {
+		tp.buildErr = fmt.Errorf("%w: %s", ErrInvalidRepeat, fmt.Sprintf(format, args...))
+	}
+}
+
+func (tp *TraversalPipeline) repeatForModifier(name string) *RepeatConfig {
+	if tp.activeRepeat == nil {
+		tp.setRepeatError("%s must immediately follow Repeat or another repeat modifier", name)
+		return nil
+	}
+	return tp.activeRepeat
+}
+
+func (tp *TraversalPipeline) validateRepeatConfiguration() error {
+	if tp.buildErr != nil {
+		return tp.buildErr
+	}
+	for _, repeat := range tp.repeats {
+		if repeat.sub == nil {
+			return fmt.Errorf("%w: Repeat requires a non-nil body", ErrInvalidRepeat)
+		}
+		if !repeat.untilSet && !repeat.timesSet && !repeat.allowUnbounded {
+			return fmt.Errorf(
+				"%w: Repeat requires Until, Times, or AllowUnboundedRepeat",
+				ErrInvalidRepeat,
+			)
+		}
+	}
+	return nil
 }
 
 // Navigation Steps
@@ -167,14 +209,7 @@ type TraversalPipeline struct {
 //
 //	g.V().Out("KNOWS")...
 func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline {
-	// If we have an active repeat config effectively "open", calling another step "closes" it?
-	// Gremlin logic: .repeat(...).out(). "out" follows the repeat block.
-	// So yes, ensure activeRepeat is closed implicitly if user forgot Until?
-	// Standard Gremlin: repeat() loops forever if no termination.
-	// We'll leave it open for Until/Times, but subsequent non-modifier calling implies end.
-	// But honestly, it's safer to just let activeRepeat hang?
-	// No, if I call .Out(), it appends a step. Repeat step was ALREADY appended.
-	// Modifiers like Until modify the *last* step if it is Repeat.
+	tp.closeActiveRepeat()
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
 		// Out() moves to neighbor nodes.
 		// We flatten the stream of EdgeIterators and wrap them in neighborIterator.
@@ -198,7 +233,7 @@ func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline {
 //
 //	g.V().In("EMPLOYED_BY")...
 func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline {
-	tp.activeRepeat = nil
+	tp.closeActiveRepeat()
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
 		flat := newFlatMapEdgeIterator(tx, prev, func(id uuid.UUID) Iterator {
 			return tx.InEdges(id, labels...)
@@ -211,7 +246,7 @@ func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline {
 // HasLabel filters the current node stream, keeping only nodes with one of the
 // specified labels.
 func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline {
-	tp.activeRepeat = nil
+	tp.closeActiveRepeat()
 	labelSet := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
 		labelSet[label] = struct{}{}
@@ -226,46 +261,115 @@ func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline {
 }
 
 // Until terminates the active Repeat when pred returns true for the current
-// materialized Node. Calling Until without an active Repeat has no effect.
+// materialized Node. It must immediately follow Repeat or another repeat
+// modifier. A nil predicate or invalid ordering returns ErrInvalidRepeat when
+// the traversal executes.
 func (tp *TraversalPipeline) Until(pred NodePredicate) *TraversalPipeline {
-	if tp.activeRepeat != nil {
-		tp.activeRepeat.until = pred
+	repeat := tp.repeatForModifier("Until")
+	if repeat == nil {
+		return tp
 	}
+	if repeat.untilSet {
+		tp.setRepeatError("Until may be specified only once")
+		return tp
+	}
+	if pred == nil {
+		tp.setRepeatError("Until requires a non-nil predicate")
+		return tp
+	}
+	if repeat.allowUnbounded {
+		tp.setRepeatError("Until cannot be combined with AllowUnboundedRepeat")
+		return tp
+	}
+	repeat.until = pred
+	repeat.untilSet = true
 	return tp
 }
 
 // Recursion Steps
 
-// Repeat repeats the provided sub-traversal.
-// It is used in conjunction with Until(), Times(), or Emit() to control the loop.
+// Repeat repeats the provided sub-traversal. Every Repeat must be terminated
+// with Until or Times unless AllowUnboundedRepeat is explicitly selected.
 //
 // Usage:
 //
 //	// 2-hop friends
-//	g.V().Repeat(func(t *TraversalPipeline) { return t.Out("KNOWS") }).Times(2)
+//	g.V().Repeat(func(t *TraversalPipeline) *TraversalPipeline {
+//		return t.Out("KNOWS")
+//	}).Times(2)
 func (tp *TraversalPipeline) Repeat(sub func(*TraversalPipeline) *TraversalPipeline) *TraversalPipeline {
+	tp.closeActiveRepeat()
 	conf := &RepeatConfig{sub: sub}
 	tp.activeRepeat = conf
+	tp.repeats = append(tp.repeats, conf)
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
 		return newRepeatIterator(tx, prev, conf)
 	})
 	return tp
 }
 
-// Times terminates a Repeat loop after a fixed number of iterations.
+// Times terminates the active Repeat after n iterations. It must immediately
+// follow Repeat or another repeat modifier, and n must be positive. Invalid
+// configuration returns ErrInvalidRepeat when the traversal executes.
 func (tp *TraversalPipeline) Times(n int) *TraversalPipeline {
-	if tp.activeRepeat != nil {
-		tp.activeRepeat.times = n
+	repeat := tp.repeatForModifier("Times")
+	if repeat == nil {
+		return tp
 	}
+	if repeat.timesSet {
+		tp.setRepeatError("Times may be specified only once")
+		return tp
+	}
+	if n <= 0 {
+		tp.setRepeatError("Times requires a positive iteration count")
+		return tp
+	}
+	if repeat.allowUnbounded {
+		tp.setRepeatError("Times cannot be combined with AllowUnboundedRepeat")
+		return tp
+	}
+	repeat.times = n
+	repeat.timesSet = true
 	return tp
 }
 
-// Emit causes the Repeat loop to emit the current element at each iteration,
-// effectively returning intermediate results as well as the final results.
+// Emit causes the active Repeat to emit the current element at each iteration,
+// effectively returning intermediate results as well as final results. Emit is
+// not a termination policy and must immediately follow Repeat or another repeat
+// modifier.
 func (tp *TraversalPipeline) Emit() *TraversalPipeline {
-	if tp.activeRepeat != nil {
-		tp.activeRepeat.emit = true
+	repeat := tp.repeatForModifier("Emit")
+	if repeat == nil {
+		return tp
 	}
+	if repeat.emitSet {
+		tp.setRepeatError("Emit may be specified only once")
+		return tp
+	}
+	repeat.emit = true
+	repeat.emitSet = true
+	return tp
+}
+
+// AllowUnboundedRepeat explicitly permits the active Repeat to run without an
+// Until predicate or Times limit. It must immediately follow Repeat or another
+// repeat modifier and cannot be combined with a termination policy. Callers
+// should execute unbounded repeats with a cancellable context or stopping
+// callback.
+func (tp *TraversalPipeline) AllowUnboundedRepeat() *TraversalPipeline {
+	repeat := tp.repeatForModifier("AllowUnboundedRepeat")
+	if repeat == nil {
+		return tp
+	}
+	if repeat.allowUnbounded {
+		tp.setRepeatError("AllowUnboundedRepeat may be specified only once")
+		return tp
+	}
+	if repeat.untilSet || repeat.timesSet {
+		tp.setRepeatError("AllowUnboundedRepeat cannot be combined with Until or Times")
+		return tp
+	}
+	repeat.allowUnbounded = true
 	return tp
 }
 
@@ -276,7 +380,7 @@ func (tp *TraversalPipeline) Emit() *TraversalPipeline {
 //
 //	g.V().Out().Path()
 func (tp *TraversalPipeline) Path() *TraversalPipeline {
-	tp.activeRepeat = nil
+	tp.closeActiveRepeat()
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
 		// Path step just materializes the path into the value stream?
 		// Or strictly exposes path history?
@@ -293,7 +397,7 @@ func (tp *TraversalPipeline) Path() *TraversalPipeline {
 // with ToNodes, this projection does not load node labels. Collect the result
 // with ToIDs or stream it with EachID.
 func (tp *TraversalPipeline) IDs() *TraversalPipeline {
-	tp.activeRepeat = nil
+	tp.closeActiveRepeat()
 	tp.steps = append(tp.steps, func(_ *Tx, prev Iterator) Iterator {
 		return newIDIterator(prev)
 	})
@@ -304,7 +408,7 @@ func (tp *TraversalPipeline) IDs() *TraversalPipeline {
 // scalar per requested key, in key order. Missing properties are omitted, and
 // calling Values without keys produces an empty result stream.
 func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline {
-	tp.activeRepeat = nil
+	tp.closeActiveRepeat()
 	tp.steps = append(tp.steps, func(tx *Tx, prev Iterator) Iterator {
 		return newValueIterator(tx, prev, keys)
 	})
@@ -385,6 +489,9 @@ func (tp *TraversalPipeline) each(
 	}
 	if yield == nil {
 		return errors.New("pathway: nil traversal callback")
+	}
+	if err := tp.validateRepeatConfiguration(); err != nil {
+		return err
 	}
 
 	queryDesc := "Traversal Query"

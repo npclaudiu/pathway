@@ -2,6 +2,7 @@ package pathway
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/npclaudiu/pathway/internal/encoding"
@@ -949,6 +950,14 @@ func (it *repeatIterator) Next() bool {
 			func(_ *Tx, _ Iterator) Iterator { return startIter },
 		}}
 		outTP := it.conf.sub(tempTP)
+		if outTP == nil {
+			it.err = fmt.Errorf("%w: Repeat body returned a nil pipeline", ErrInvalidRepeat)
+			return false
+		}
+		if err := outTP.validateRepeatConfiguration(); err != nil {
+			it.err = err
+			return false
+		}
 
 		var iter Iterator
 		for _, step := range outTP.steps {

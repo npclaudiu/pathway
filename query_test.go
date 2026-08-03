@@ -662,6 +662,178 @@ func TestQuery_Repeat(t *testing.T) {
 	if len(visited) != 3 || visited[0].ID != a || visited[2].ID != c {
 		t.Fatalf("Until predicate nodes = %#v, want A through C", visited)
 	}
+
+	res, err = g.V(a).Repeat(func(p *TraversalPipeline) *TraversalPipeline {
+		return p.Out("NEXT")
+	}).Times(3).Until(func(node Node) bool {
+		return node.ID == c
+	}).Emit().ToNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Node{{ID: a, Label: "Node"}, {ID: b, Label: "Node"}, {ID: c, Label: "Node"}}; !reflect.DeepEqual(res, want) {
+		t.Fatalf("combined repeat modifiers = %#v, want %#v", res, want)
+	}
+}
+
+func TestQuery_RepeatRequiresValidConfiguration(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	g := NewTraversalSource(db)
+	body := func(p *TraversalPipeline) *TraversalPipeline { return p.Out("NEXT") }
+	pred := func(Node) bool { return false }
+	tests := []struct {
+		name     string
+		pipeline func() *TraversalPipeline
+	}{
+		{"unterminated", func() *TraversalPipeline { return g.V().Repeat(body) }},
+		{"emit is not termination", func() *TraversalPipeline { return g.V().Repeat(body).Emit() }},
+		{"nil body", func() *TraversalPipeline { return g.V().Repeat(nil).Times(1) }},
+		{"nil predicate", func() *TraversalPipeline { return g.V().Repeat(body).Until(nil) }},
+		{"zero times", func() *TraversalPipeline { return g.V().Repeat(body).Times(0) }},
+		{"negative times", func() *TraversalPipeline { return g.V().Repeat(body).Times(-1) }},
+		{"until without repeat", func() *TraversalPipeline { return g.V().Until(pred) }},
+		{"times without repeat", func() *TraversalPipeline { return g.V().Times(1) }},
+		{"emit without repeat", func() *TraversalPipeline { return g.V().Emit() }},
+		{"allow unbounded without repeat", func() *TraversalPipeline { return g.V().AllowUnboundedRepeat() }},
+		{"duplicate until", func() *TraversalPipeline { return g.V().Repeat(body).Until(pred).Until(pred) }},
+		{"duplicate times", func() *TraversalPipeline { return g.V().Repeat(body).Times(1).Times(2) }},
+		{"duplicate emit", func() *TraversalPipeline { return g.V().Repeat(body).Times(1).Emit().Emit() }},
+		{"duplicate allow unbounded", func() *TraversalPipeline {
+			return g.V().Repeat(body).AllowUnboundedRepeat().AllowUnboundedRepeat()
+		}},
+		{"times then unbounded", func() *TraversalPipeline {
+			return g.V().Repeat(body).Times(1).AllowUnboundedRepeat()
+		}},
+		{"unbounded then times", func() *TraversalPipeline {
+			return g.V().Repeat(body).AllowUnboundedRepeat().Times(1)
+		}},
+		{"until then unbounded", func() *TraversalPipeline {
+			return g.V().Repeat(body).Until(pred).AllowUnboundedRepeat()
+		}},
+		{"unbounded then until", func() *TraversalPipeline {
+			return g.V().Repeat(body).AllowUnboundedRepeat().Until(pred)
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := test.pipeline().ToList()
+			if !errors.Is(err, ErrInvalidRepeat) {
+				t.Fatalf("error = %v, want ErrInvalidRepeat", err)
+			}
+		})
+	}
+}
+
+func TestQuery_RepeatModifiersCloseAfterTraversalSteps(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	g := NewTraversalSource(db)
+	body := func(p *TraversalPipeline) *TraversalPipeline { return p.Out() }
+	steps := []struct {
+		name string
+		step func(*TraversalPipeline) *TraversalPipeline
+	}{
+		{"Out", func(p *TraversalPipeline) *TraversalPipeline { return p.Out() }},
+		{"In", func(p *TraversalPipeline) *TraversalPipeline { return p.In() }},
+		{"HasLabel", func(p *TraversalPipeline) *TraversalPipeline { return p.HasLabel("Node") }},
+		{"Path", func(p *TraversalPipeline) *TraversalPipeline { return p.Path() }},
+		{"IDs", func(p *TraversalPipeline) *TraversalPipeline { return p.IDs() }},
+		{"Values", func(p *TraversalPipeline) *TraversalPipeline { return p.Values("name") }},
+	}
+
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			pipeline := g.V().Repeat(body).Times(1)
+			pipeline = step.step(pipeline).Emit()
+			_, err := pipeline.ToList()
+			if !errors.Is(err, ErrInvalidRepeat) {
+				t.Fatalf("error = %v, want ErrInvalidRepeat", err)
+			}
+		})
+	}
+}
+
+func TestQuery_RepeatBodyConfigurationIsValidated(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	id := uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		return tx.PutNode(id, "Node")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := NewTraversalSource(db)
+
+	tests := []struct {
+		name string
+		body func(*TraversalPipeline) *TraversalPipeline
+	}{
+		{"nil pipeline", func(*TraversalPipeline) *TraversalPipeline { return nil }},
+		{"unterminated nested repeat", func(p *TraversalPipeline) *TraversalPipeline {
+			return p.Repeat(func(nested *TraversalPipeline) *TraversalPipeline { return nested.Out() })
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := g.V(id).Repeat(test.body).Times(1).ToNodes()
+			if !errors.Is(err, ErrInvalidRepeat) {
+				t.Fatalf("error = %v, want ErrInvalidRepeat", err)
+			}
+		})
+	}
+}
+
+func TestQuery_RepeatAllowsExplicitUnboundedExecution(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestResource(t, db)
+
+	id := uuid.New()
+	if err := db.Update(context.Background(), func(tx *Tx) error {
+		if err := tx.PutNode(id, "Node"); err != nil {
+			return err
+		}
+		_, err := tx.PutEdge(id, id, "LOOP")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := errors.New("stop repeat")
+	count := 0
+	err = NewTraversalSource(db).V(id).
+		Repeat(func(p *TraversalPipeline) *TraversalPipeline { return p.Out("LOOP") }).
+		Emit().
+		AllowUnboundedRepeat().
+		EachNode(context.Background(), func(Node) error {
+			count++
+			if count == 3 {
+				return stop
+			}
+			return nil
+		})
+	if !errors.Is(err, stop) {
+		t.Fatalf("error = %v, want stopping callback error", err)
+	}
+	if count != 3 {
+		t.Fatalf("emitted %d nodes, want 3", count)
+	}
 }
 
 func TestQuery_Values(t *testing.T) {
@@ -759,20 +931,5 @@ func TestQuery_IDsAvoidLabelMaterializationAcrossHops(t *testing.T) {
 	}
 	if want := []interface{}{"middle"}; !reflect.DeepEqual(values, want) {
 		t.Fatalf("neighbor values = %#v, want %#v", values, want)
-	}
-}
-
-func TestQuery_Limit_Count_Placeholder(t *testing.T) {
-	// Not implemented in query.go yet, skipping.
-	// But Emit/Until are methods on Pipeline.
-	// We should call them to cover the builder code.
-
-	db, _ := Open(":memory:")
-	defer closeTestResource(t, db)
-	g := NewTraversalSource(db)
-
-	p := g.V().Emit().Until(func(Node) bool { return true })
-	if p == nil {
-		t.Error("Emit/Until returned nil")
 	}
 }

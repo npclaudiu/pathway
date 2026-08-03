@@ -658,10 +658,22 @@ one materialized result does not mutate another result. The `dir` field on
 
 ### Repeat execution
 
-`Repeat` stores a mutable `RepeatConfig` captured by the pipeline step.
-`Until`, `Times`, and `Emit` mutate the active configuration and silently do
-nothing when no repeat is active. Some later steps clear `activeRepeat`, while
-`Out` currently does not, so modifier ordering is not uniformly enforced.
+`Repeat` stores a mutable `RepeatConfig` captured by the pipeline step and
+registers it with the traversal for execution-time validation. `Until`,
+`Times`, `Emit`, and `AllowUnboundedRepeat` may be chained in any order while
+that repeat is active. Every navigation, filtering, projection, or subsequent
+repeat step closes the active modifier window consistently. A modifier outside
+that window, a duplicate modifier, a nil body or predicate, a non-positive
+iteration count, or an unbounded opt-in combined with a termination policy is
+recorded as `ErrInvalidRepeat` rather than ignored.
+
+Before opening a read transaction, terminal execution validates that each
+repeat has a non-nil body and either a non-nil `Until`, a positive `Times`, or
+an explicit `AllowUnboundedRepeat`. `Emit` only controls result emission and is
+not a termination policy. Repeat bodies are validated after construction too,
+including nested repeats and nil returned pipelines. Intentionally unbounded
+repeats remain interruptible through traversal context cancellation or a
+stopping streaming callback.
 
 `repeatIterator` performs breadth-first expansion:
 
@@ -671,11 +683,11 @@ nothing when no repeat is active. Some later steps clear `activeRepeat`, while
 - it enqueues returned nodes with incremented depth;
 - termination is checked when a traverser is dequeued.
 
-There is no visited set or cycle detection. A repeat with neither a reachable
-`Until` condition nor a positive `Times` limit can run forever on a cyclic
-graph. Queue reslicing retains backing memory, and per-traverser pipeline
-construction is expensive. Repeat path propagation is also incomplete because
-each sub-traversal starts from a fresh fixed-node path rather than explicitly
+There is no visited set or cycle detection. An explicitly unbounded repeat, or
+one whose `Until` predicate is unreachable, can run forever on a cyclic graph.
+Queue reslicing retains backing memory, and per-traverser pipeline construction
+is expensive. Repeat path propagation is also incomplete because each
+sub-traversal starts from a fresh fixed-node path rather than explicitly
 carrying the entire parent path.
 
 ## OGM and predicates
@@ -700,8 +712,9 @@ helpers are not a general indexed-filter language.
 ## Errors and corruption behavior
 
 Public sentinel errors cover invalid database/snapshot handles, missing raw
-snapshot keys, missing nodes/edges/entities, invalid textual node IDs, typed
-terminal mismatches, dangling edge creation, and unsupported schema versions.
+snapshot keys, missing nodes/edges/entities, invalid textual node IDs, invalid
+repeat configurations, typed terminal mismatches, dangling edge creation, and
+unsupported schema versions.
 Pebble errors such as `pebble.ErrNotFound`,
 `pebble.ErrReadOnly`, and `pebble.ErrClosed` can also escape from public APIs.
 Encoding errors live in `internal/encoding` but are observable through iterator

@@ -12,6 +12,7 @@ var (
 	ErrEntityNotFound     = errors.New("node or edge not found")
 	ErrInvalidNodeID      = errors.New("invalid textual node ID")
 	ErrTraversalResult    = errors.New("unexpected traversal result type")
+	ErrInvalidRepeat      = errors.New("invalid repeat configuration")
 	ErrInvalidExternalID  = errors.New("invalid external ID")
 	ErrExternalIDConflict = errors.New("external ID is already bound to another node")
 	ErrExternalIDCorrupt  = errors.New("corrupt external ID records")

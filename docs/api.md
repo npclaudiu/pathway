@@ -58,6 +58,7 @@ import "github.com/npclaudiu/pathway"
 - [type Step](<#Step>)
 - [type Traversal](<#Traversal>)
 - [type TraversalPipeline](<#TraversalPipeline>)
+  - [func \(tp \*TraversalPipeline\) AllowUnboundedRepeat\(\) \*TraversalPipeline](<#TraversalPipeline.AllowUnboundedRepeat>)
   - [func \(tp \*TraversalPipeline\) Each\(ctx context.Context, yield func\(any\) error\) \(err error\)](<#TraversalPipeline.Each>)
   - [func \(tp \*TraversalPipeline\) EachEdge\(ctx context.Context, yield func\(Edge\) error\) error](<#TraversalPipeline.EachEdge>)
   - [func \(tp \*TraversalPipeline\) EachID\(ctx context.Context, yield func\(uuid.UUID\) error\) error](<#TraversalPipeline.EachID>)
@@ -135,6 +136,7 @@ var (
     ErrEntityNotFound     = errors.New("node or edge not found")
     ErrInvalidNodeID      = errors.New("invalid textual node ID")
     ErrTraversalResult    = errors.New("unexpected traversal result type")
+    ErrInvalidRepeat      = errors.New("invalid repeat configuration")
     ErrInvalidExternalID  = errors.New("invalid external ID")
     ErrExternalIDConflict = errors.New("external ID is already bound to another node")
     ErrExternalIDCorrupt  = errors.New("corrupt external ID records")
@@ -358,7 +360,7 @@ type Edge struct {
 ```
 
 <a name="EdgeIterator"></a>
-## type [EdgeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L34-L40>)
+## type [EdgeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L35-L41>)
 
 EdgeIterator iterates over edges returning typed data.
 
@@ -443,7 +445,7 @@ type IndexDefinition struct {
 ```
 
 <a name="Iterator"></a>
-## type [Iterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L13-L31>)
+## type [Iterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L14-L32>)
 
 Iterator is the generic interface for iterating over key\-value pairs. It abstracts the underlying storage iterator. Users typically interact with specific interfaces like NodeIterator or EdgeIterator.
 
@@ -496,7 +498,7 @@ type Node struct {
 ```
 
 <a name="NodeIterator"></a>
-## type [NodeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L43-L47>)
+## type [NodeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L44-L48>)
 
 NodeIterator iterates over nodes returning typed data.
 
@@ -684,7 +686,7 @@ pathway.Prefix("User-")
 ```
 
 <a name="RepeatConfig"></a>
-## type [RepeatConfig](<https://github.com/npclaudiu/pathway/blob/main/query.go#L146-L151>)
+## type [RepeatConfig](<https://github.com/npclaudiu/pathway/blob/main/query.go#L146-L155>)
 
 RepeatConfig holds configuration for repeat steps \(loops\).
 
@@ -743,7 +745,7 @@ type Traversal struct {
 ```
 
 <a name="TraversalPipeline"></a>
-## type [TraversalPipeline](<https://github.com/npclaudiu/pathway/blob/main/query.go#L154-L158>)
+## type [TraversalPipeline](<https://github.com/npclaudiu/pathway/blob/main/query.go#L158-L164>)
 
 TraversalPipeline represents a chain of query steps.
 
@@ -753,8 +755,17 @@ type TraversalPipeline struct {
 }
 ```
 
+<a name="TraversalPipeline.AllowUnboundedRepeat"></a>
+### func \(\*TraversalPipeline\) [AllowUnboundedRepeat](<https://github.com/npclaudiu/pathway/blob/main/query.go#L359>)
+
+```go
+func (tp *TraversalPipeline) AllowUnboundedRepeat() *TraversalPipeline
+```
+
+AllowUnboundedRepeat explicitly permits the active Repeat to run without an Until predicate or Times limit. It must immediately follow Repeat or another repeat modifier and cannot be combined with a termination policy. Callers should execute unbounded repeats with a cancellable context or stopping callback.
+
 <a name="TraversalPipeline.Each"></a>
-### func \(\*TraversalPipeline\) [Each](<https://github.com/npclaudiu/pathway/blob/main/query.go#L327>)
+### func \(\*TraversalPipeline\) [Each](<https://github.com/npclaudiu/pathway/blob/main/query.go#L431>)
 
 ```go
 func (tp *TraversalPipeline) Each(ctx context.Context, yield func(any) error) (err error)
@@ -765,7 +776,7 @@ Each executes the traversal pipeline and calls yield once for every result. It s
 Unprojected nodes and edges are passed as Node and Edge values. IDs emits uuid.UUID, Path emits Path, and Values emits the dynamic property types documented by Predicate. The values passed to yield own their data and remain valid after yield returns. Prefer a typed EachNode, EachEdge, EachPath, or EachID terminal for statically typed results.
 
 <a name="TraversalPipeline.EachEdge"></a>
-### func \(\*TraversalPipeline\) [EachEdge](<https://github.com/npclaudiu/pathway/blob/main/query.go#L339>)
+### func \(\*TraversalPipeline\) [EachEdge](<https://github.com/npclaudiu/pathway/blob/main/query.go#L443>)
 
 ```go
 func (tp *TraversalPipeline) EachEdge(ctx context.Context, yield func(Edge) error) error
@@ -774,7 +785,7 @@ func (tp *TraversalPipeline) EachEdge(ctx context.Context, yield func(Edge) erro
 EachEdge executes an edge traversal and calls yield for every Edge. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.EachID"></a>
-### func \(\*TraversalPipeline\) [EachID](<https://github.com/npclaudiu/pathway/blob/main/query.go#L352>)
+### func \(\*TraversalPipeline\) [EachID](<https://github.com/npclaudiu/pathway/blob/main/query.go#L456>)
 
 ```go
 func (tp *TraversalPipeline) EachID(ctx context.Context, yield func(uuid.UUID) error) error
@@ -783,7 +794,7 @@ func (tp *TraversalPipeline) EachID(ctx context.Context, yield func(uuid.UUID) e
 EachID executes a traversal ending in IDs and calls yield for every UUID. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.EachNode"></a>
-### func \(\*TraversalPipeline\) [EachNode](<https://github.com/npclaudiu/pathway/blob/main/query.go#L333>)
+### func \(\*TraversalPipeline\) [EachNode](<https://github.com/npclaudiu/pathway/blob/main/query.go#L437>)
 
 ```go
 func (tp *TraversalPipeline) EachNode(ctx context.Context, yield func(Node) error) error
@@ -792,7 +803,7 @@ func (tp *TraversalPipeline) EachNode(ctx context.Context, yield func(Node) erro
 EachNode executes a node traversal and calls yield for every Node. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.EachPath"></a>
-### func \(\*TraversalPipeline\) [EachPath](<https://github.com/npclaudiu/pathway/blob/main/query.go#L346>)
+### func \(\*TraversalPipeline\) [EachPath](<https://github.com/npclaudiu/pathway/blob/main/query.go#L450>)
 
 ```go
 func (tp *TraversalPipeline) EachPath(ctx context.Context, yield func(Path) error) error
@@ -801,16 +812,16 @@ func (tp *TraversalPipeline) EachPath(ctx context.Context, yield func(Path) erro
 EachPath executes a traversal ending in Path and calls yield for every Path. It returns ErrTraversalResult when the final pipeline step emits another type.
 
 <a name="TraversalPipeline.Emit"></a>
-### func \(\*TraversalPipeline\) [Emit](<https://github.com/npclaudiu/pathway/blob/main/query.go#L265>)
+### func \(\*TraversalPipeline\) [Emit](<https://github.com/npclaudiu/pathway/blob/main/query.go#L340>)
 
 ```go
 func (tp *TraversalPipeline) Emit() *TraversalPipeline
 ```
 
-Emit causes the Repeat loop to emit the current element at each iteration, effectively returning intermediate results as well as the final results.
+Emit causes the active Repeat to emit the current element at each iteration, effectively returning intermediate results as well as final results. Emit is not a termination policy and must immediately follow Repeat or another repeat modifier.
 
 <a name="TraversalPipeline.HasLabel"></a>
-### func \(\*TraversalPipeline\) [HasLabel](<https://github.com/npclaudiu/pathway/blob/main/query.go#L213>)
+### func \(\*TraversalPipeline\) [HasLabel](<https://github.com/npclaudiu/pathway/blob/main/query.go#L248>)
 
 ```go
 func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline
@@ -819,7 +830,7 @@ func (tp *TraversalPipeline) HasLabel(labels ...string) *TraversalPipeline
 HasLabel filters the current node stream, keeping only nodes with one of the specified labels.
 
 <a name="TraversalPipeline.IDs"></a>
-### func \(\*TraversalPipeline\) [IDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L295>)
+### func \(\*TraversalPipeline\) [IDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L399>)
 
 ```go
 func (tp *TraversalPipeline) IDs() *TraversalPipeline
@@ -828,7 +839,7 @@ func (tp *TraversalPipeline) IDs() *TraversalPipeline
 IDs projects UUIDs from the current node stream. Unlike materializing nodes with ToNodes, this projection does not load node labels. Collect the result with ToIDs or stream it with EachID.
 
 <a name="TraversalPipeline.In"></a>
-### func \(\*TraversalPipeline\) [In](<https://github.com/npclaudiu/pathway/blob/main/query.go#L200>)
+### func \(\*TraversalPipeline\) [In](<https://github.com/npclaudiu/pathway/blob/main/query.go#L235>)
 
 ```go
 func (tp *TraversalPipeline) In(labels ...string) *TraversalPipeline
@@ -843,7 +854,7 @@ g.V().In("EMPLOYED_BY")...
 ```
 
 <a name="TraversalPipeline.Out"></a>
-### func \(\*TraversalPipeline\) [Out](<https://github.com/npclaudiu/pathway/blob/main/query.go#L169>)
+### func \(\*TraversalPipeline\) [Out](<https://github.com/npclaudiu/pathway/blob/main/query.go#L211>)
 
 ```go
 func (tp *TraversalPipeline) Out(labels ...string) *TraversalPipeline
@@ -858,7 +869,7 @@ g.V().Out("KNOWS")...
 ```
 
 <a name="TraversalPipeline.Path"></a>
-### func \(\*TraversalPipeline\) [Path](<https://github.com/npclaudiu/pathway/blob/main/query.go#L278>)
+### func \(\*TraversalPipeline\) [Path](<https://github.com/npclaudiu/pathway/blob/main/query.go#L382>)
 
 ```go
 func (tp *TraversalPipeline) Path() *TraversalPipeline
@@ -871,32 +882,34 @@ g.V().Out().Path()
 ```
 
 <a name="TraversalPipeline.Repeat"></a>
-### func \(\*TraversalPipeline\) [Repeat](<https://github.com/npclaudiu/pathway/blob/main/query.go#L246>)
+### func \(\*TraversalPipeline\) [Repeat](<https://github.com/npclaudiu/pathway/blob/main/query.go#L300>)
 
 ```go
 func (tp *TraversalPipeline) Repeat(sub func(*TraversalPipeline) *TraversalPipeline) *TraversalPipeline
 ```
 
-Repeat repeats the provided sub\-traversal. It is used in conjunction with Until\(\), Times\(\), or Emit\(\) to control the loop.
+Repeat repeats the provided sub\-traversal. Every Repeat must be terminated with Until or Times unless AllowUnboundedRepeat is explicitly selected.
 
 Usage:
 
 ```
 // 2-hop friends
-g.V().Repeat(func(t *TraversalPipeline) { return t.Out("KNOWS") }).Times(2)
+g.V().Repeat(func(t *TraversalPipeline) *TraversalPipeline {
+	return t.Out("KNOWS")
+}).Times(2)
 ```
 
 <a name="TraversalPipeline.Times"></a>
-### func \(\*TraversalPipeline\) [Times](<https://github.com/npclaudiu/pathway/blob/main/query.go#L256>)
+### func \(\*TraversalPipeline\) [Times](<https://github.com/npclaudiu/pathway/blob/main/query.go#L314>)
 
 ```go
 func (tp *TraversalPipeline) Times(n int) *TraversalPipeline
 ```
 
-Times terminates a Repeat loop after a fixed number of iterations.
+Times terminates the active Repeat after n iterations. It must immediately follow Repeat or another repeat modifier, and n must be positive. Invalid configuration returns ErrInvalidRepeat when the traversal executes.
 
 <a name="TraversalPipeline.ToEdges"></a>
-### func \(\*TraversalPipeline\) [ToEdges](<https://github.com/npclaudiu/pathway/blob/main/query.go#L525>)
+### func \(\*TraversalPipeline\) [ToEdges](<https://github.com/npclaudiu/pathway/blob/main/query.go#L632>)
 
 ```go
 func (tp *TraversalPipeline) ToEdges() ([]Edge, error)
@@ -905,7 +918,7 @@ func (tp *TraversalPipeline) ToEdges() ([]Edge, error)
 ToEdges executes an edge traversal and returns its materialized Edge values. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachEdge to consume large edge result sets with bounded memory.
 
 <a name="TraversalPipeline.ToEdgesContext"></a>
-### func \(\*TraversalPipeline\) [ToEdgesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L530>)
+### func \(\*TraversalPipeline\) [ToEdgesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L637>)
 
 ```go
 func (tp *TraversalPipeline) ToEdgesContext(ctx context.Context) ([]Edge, error)
@@ -914,7 +927,7 @@ func (tp *TraversalPipeline) ToEdgesContext(ctx context.Context) ([]Edge, error)
 ToEdgesContext is ToEdges with cancellation and observability context.
 
 <a name="TraversalPipeline.ToIDs"></a>
-### func \(\*TraversalPipeline\) [ToIDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L549>)
+### func \(\*TraversalPipeline\) [ToIDs](<https://github.com/npclaudiu/pathway/blob/main/query.go#L656>)
 
 ```go
 func (tp *TraversalPipeline) ToIDs() ([]uuid.UUID, error)
@@ -923,7 +936,7 @@ func (tp *TraversalPipeline) ToIDs() ([]uuid.UUID, error)
 ToIDs executes a traversal ending in IDs and returns typed UUID values. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachID to consume large ID result sets with bounded memory.
 
 <a name="TraversalPipeline.ToIDsContext"></a>
-### func \(\*TraversalPipeline\) [ToIDsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L554>)
+### func \(\*TraversalPipeline\) [ToIDsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L661>)
 
 ```go
 func (tp *TraversalPipeline) ToIDsContext(ctx context.Context) ([]uuid.UUID, error)
@@ -932,7 +945,7 @@ func (tp *TraversalPipeline) ToIDsContext(ctx context.Context) ([]uuid.UUID, err
 ToIDsContext is ToIDs with cancellation and observability context.
 
 <a name="TraversalPipeline.ToList"></a>
-### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L484>)
+### func \(\*TraversalPipeline\) [ToList](<https://github.com/npclaudiu/pathway/blob/main/query.go#L591>)
 
 ```go
 func (tp *TraversalPipeline) ToList() (results []any, err error)
@@ -941,7 +954,7 @@ func (tp *TraversalPipeline) ToList() (results []any, err error)
 ToList executes the traversal pipeline and returns dynamic materialized results. Nodes use Node, edges use Edge, IDs uses uuid.UUID, Path uses Path, and Values uses the property types documented by Predicate. Prefer ToNodes, ToEdges, ToIDs, or ToPaths for statically typed results. To consume dynamic results with bounded memory, use Each.
 
 <a name="TraversalPipeline.ToListContext"></a>
-### func \(\*TraversalPipeline\) [ToListContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L491>)
+### func \(\*TraversalPipeline\) [ToListContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L598>)
 
 ```go
 func (tp *TraversalPipeline) ToListContext(ctx context.Context) (results []any, err error)
@@ -950,7 +963,7 @@ func (tp *TraversalPipeline) ToListContext(ctx context.Context) (results []any, 
 ToListContext executes the traversal pipeline with ctx and returns materialized results. Cancellation stops planning, reads, scans, repeats, and result collection, and is propagated to observability hooks.
 
 <a name="TraversalPipeline.ToNodes"></a>
-### func \(\*TraversalPipeline\) [ToNodes](<https://github.com/npclaudiu/pathway/blob/main/query.go#L513>)
+### func \(\*TraversalPipeline\) [ToNodes](<https://github.com/npclaudiu/pathway/blob/main/query.go#L620>)
 
 ```go
 func (tp *TraversalPipeline) ToNodes() ([]Node, error)
@@ -959,7 +972,7 @@ func (tp *TraversalPipeline) ToNodes() ([]Node, error)
 ToNodes executes a node traversal and returns its materialized Node values. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachNode to consume large node result sets with bounded memory.
 
 <a name="TraversalPipeline.ToNodesContext"></a>
-### func \(\*TraversalPipeline\) [ToNodesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L518>)
+### func \(\*TraversalPipeline\) [ToNodesContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L625>)
 
 ```go
 func (tp *TraversalPipeline) ToNodesContext(ctx context.Context) ([]Node, error)
@@ -968,7 +981,7 @@ func (tp *TraversalPipeline) ToNodesContext(ctx context.Context) ([]Node, error)
 ToNodesContext is ToNodes with cancellation and observability context.
 
 <a name="TraversalPipeline.ToPaths"></a>
-### func \(\*TraversalPipeline\) [ToPaths](<https://github.com/npclaudiu/pathway/blob/main/query.go#L537>)
+### func \(\*TraversalPipeline\) [ToPaths](<https://github.com/npclaudiu/pathway/blob/main/query.go#L644>)
 
 ```go
 func (tp *TraversalPipeline) ToPaths() ([]Path, error)
@@ -977,7 +990,7 @@ func (tp *TraversalPipeline) ToPaths() ([]Path, error)
 ToPaths executes a traversal ending in Path and returns typed path snapshots. It returns ErrTraversalResult when the final pipeline step emits another type. Use EachPath to consume large path result sets with bounded memory.
 
 <a name="TraversalPipeline.ToPathsContext"></a>
-### func \(\*TraversalPipeline\) [ToPathsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L542>)
+### func \(\*TraversalPipeline\) [ToPathsContext](<https://github.com/npclaudiu/pathway/blob/main/query.go#L649>)
 
 ```go
 func (tp *TraversalPipeline) ToPathsContext(ctx context.Context) ([]Path, error)
@@ -986,16 +999,16 @@ func (tp *TraversalPipeline) ToPathsContext(ctx context.Context) ([]Path, error)
 ToPathsContext is ToPaths with cancellation and observability context.
 
 <a name="TraversalPipeline.Until"></a>
-### func \(\*TraversalPipeline\) [Until](<https://github.com/npclaudiu/pathway/blob/main/query.go#L230>)
+### func \(\*TraversalPipeline\) [Until](<https://github.com/npclaudiu/pathway/blob/main/query.go#L267>)
 
 ```go
 func (tp *TraversalPipeline) Until(pred NodePredicate) *TraversalPipeline
 ```
 
-Until terminates the active Repeat when pred returns true for the current materialized Node. Calling Until without an active Repeat has no effect.
+Until terminates the active Repeat when pred returns true for the current materialized Node. It must immediately follow Repeat or another repeat modifier. A nil predicate or invalid ordering returns ErrInvalidRepeat when the traversal executes.
 
 <a name="TraversalPipeline.Values"></a>
-### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L306>)
+### func \(\*TraversalPipeline\) [Values](<https://github.com/npclaudiu/pathway/blob/main/query.go#L410>)
 
 ```go
 func (tp *TraversalPipeline) Values(keys ...string) *TraversalPipeline
