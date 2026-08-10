@@ -144,7 +144,7 @@ definitions occupy separate contiguous ranges. Prefix scans use a lower bound
 equal to the desired prefix and `keyUpperBound(prefix)` as an exclusive upper
 bound.
 
-The exact schema-v4 layouts and type tags are documented in
+The exact schema-v5 layouts and type tags are documented in
 [storage-format.md](storage-format.md). Important architectural consequences
 are:
 
@@ -539,10 +539,11 @@ for IDs, properties, and paths. Traversal adapters rely on runtime type checks,
 so an incompatible custom `Step` reports a pipeline type error during
 execution.
 
-Malformed node labels are not consistently rejected: `GetNode` and
-`nodeIterator.Node` currently ignore a failed `DecodeLabel` result. Edge and
-reverse-record decoders are stricter. Corruption handling should become
-consistent before treating low-level raw writes as supported.
+Typed node, edge, index, and property readers validate complete key and value
+lengths before decoding. They reject truncation, trailing bytes, and mismatched
+adjacency edge IDs with `ErrCorruptData`; accessor failures also become the
+iterator's terminal error. Low-level raw writes remain an advanced escape hatch
+and must preserve the documented storage format.
 
 `flatMapEdgeIterator.Next` uses recursion to skip empty inner iterators. A long
 sequence of input nodes with no matching edges can grow the stack.
@@ -746,11 +747,12 @@ helpers are not a general indexed-filter language.
 Public sentinel errors cover invalid database/snapshot handles, missing raw
 snapshot keys, missing nodes/edges/entities, invalid textual node IDs, invalid
 repeat configurations, invalid iterator positions, typed terminal mismatches,
-dangling edge creation, and unsupported schema versions.
+dangling edge creation, corrupt stored records, and unsupported schema versions.
 Pebble errors such as `pebble.ErrNotFound`,
 `pebble.ErrReadOnly`, and `pebble.ErrClosed` can also escape from public APIs.
-Encoding errors live in `internal/encoding` but are observable through iterator
-and mutation returns.
+Typed decoding errors wrap `ErrCorruptData` and identify the record type without
+including stored keys or values. Internal codec sentinels remain wrapped for
+package tests and diagnostics.
 
 Error conventions are not yet completely uniform:
 
@@ -762,11 +764,11 @@ Error conventions are not yet completely uniform:
 - `View` ignores snapshot-close errors, while `ToList` and `DeleteNode` join
   relevant close errors.
 
-Raw storage corruption normally aborts mutations that decode edge records.
-Node decoding is less strict as noted above. Tests deliberately inject
-malformed adjacency and reverse records to verify rollback. New decoders should
-validate lengths before slicing or narrowing integer fields and should return
-stable errors instead of panicking.
+Raw storage corruption aborts reads and mutations that decode the affected
+record. Tests deliberately inject malformed node, adjacency, index, property,
+and reverse records to verify contextual errors and rollback. New decoders must
+validate complete lengths before slicing or narrowing integer fields and wrap
+failures with `ErrCorruptData`.
 
 ## Performance model
 
@@ -901,7 +903,6 @@ design issues are:
 - mutable, dynamically typed pipelines and dynamically typed projections;
 - synchronous user hooks and predicates can delay cancellation until they return;
 - eager path tracking for traversals that do not request paths;
-- inconsistent stored-data corruption semantics;
 - public exposure of Pebble types;
 - limited reflection loading and dynamically typed predicates;
 

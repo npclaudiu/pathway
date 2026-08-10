@@ -22,6 +22,10 @@ schemas are rejected with `ErrUnsupportedSchema`; recreate them with the
 current release. Establish migrations and compatibility fixtures before using
 Pathway where stored data cannot be rebuilt.
 
+Typed node, edge, index, and property reads validate complete stored records.
+Malformed data returns `ErrCorruptData`; its message identifies the record type
+without including the stored key or value.
+
 ## Quickstart
 
 Initialize the database, perform transactions, and run queries.

@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/google/uuid"
 	"github.com/npclaudiu/pathway/internal/encoding"
 	"github.com/npclaudiu/pathway/internal/properties"
 )
@@ -101,7 +100,11 @@ func loadIndexDefinitions(db *pebble.DB) ([]IndexDefinition, error) {
 		label, property, err := encoding.DecodeIndexDefinitionKey(iter.Key())
 		if err != nil {
 			_ = iter.Close()
-			return nil, err
+			return nil, corruptRecord("index definition key", err)
+		}
+		if len(iter.Value()) != 0 {
+			_ = iter.Close()
+			return nil, corruptRecord("index definition value", encoding.ErrInvalidValueFormat)
 		}
 		definitions = append(definitions, IndexDefinition{Label: label, Property: property})
 	}
@@ -121,21 +124,20 @@ func buildIndexDefinition(db *pebble.DB, batch *pebble.Batch, definition IndexDe
 	}
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if len(iter.Key()) != 17 {
+		nodeID, err := encoding.DecodeNodeKey(iter.Key())
+		if err != nil {
 			_ = iter.Close()
-			return encoding.ErrInvalidKeyFormat
+			return corruptRecord("node key", err)
 		}
-		label, consumed := encoding.DecodeLabel(iter.Value())
-		if consumed == 0 || consumed != len(iter.Value()) {
+		label, err := encoding.DecodeNodeValue(iter.Value())
+		if err != nil {
 			_ = iter.Close()
-			return encoding.ErrInvalidValueFormat
+			return corruptRecord("node value", err)
 		}
 		if label != definition.Label {
 			continue
 		}
 
-		var nodeID uuid.UUID
-		copy(nodeID[:], iter.Key()[1:])
 		propertyValue, closer, err := db.Get(encoding.EncodePropertyKey(nodeID))
 		if errors.Is(err, pebble.ErrNotFound) {
 			continue
@@ -152,7 +154,7 @@ func buildIndexDefinition(db *pebble.DB, batch *pebble.Batch, definition IndexDe
 		props, err := properties.UnmarshalProperties(propertyData)
 		if err != nil {
 			_ = iter.Close()
-			return err
+			return corruptRecord("property value", err)
 		}
 		value, exists := props[definition.Property]
 		if !exists {

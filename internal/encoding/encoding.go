@@ -43,6 +43,16 @@ func EncodeNodeKey(id uuid.UUID) []byte {
 	return k
 }
 
+// DecodeNodeKey decodes and validates a complete node key.
+func DecodeNodeKey(key []byte) (uuid.UUID, error) {
+	if len(key) != 1+len(uuid.UUID{}) || key[0] != PrefixNode {
+		return uuid.Nil, ErrInvalidKeyFormat
+	}
+	var id uuid.UUID
+	copy(id[:], key[1:])
+	return id, nil
+}
+
 // EncodeExternalIDKey returns the forward lookup key for a namespaced external
 // ID. Every component is length-delimited, so scopes and values cannot collide
 // through concatenation.
@@ -232,6 +242,38 @@ func EncodeEdgeValue(edgeID uuid.UUID) []byte {
 	return v
 }
 
+// DecodeEdgeValue decodes and validates a complete adjacency value.
+func DecodeEdgeValue(value []byte) (uuid.UUID, error) {
+	if len(value) != len(uuid.UUID{}) {
+		return uuid.Nil, ErrInvalidValueFormat
+	}
+	var edgeID uuid.UUID
+	copy(edgeID[:], value)
+	return edgeID, nil
+}
+
+// DecodeEdgeKey decodes and validates a complete adjacency key. The first UUID
+// is the source for outgoing records and the target for incoming records; the
+// second UUID is the node at the other end of the edge.
+func DecodeEdgeKey(key []byte) (uuid.UUID, uuid.UUID, uuid.UUID, string, error) {
+	if len(key) < 1+16+2+16+16 ||
+		(key[0] != PrefixEdgeOut && key[0] != PrefixEdgeIn) {
+		return uuid.Nil, uuid.Nil, uuid.Nil, "", ErrInvalidKeyFormat
+	}
+
+	label, consumed := DecodeLabel(key[17:])
+	if consumed == 0 || len(key) != 17+consumed+16+16 {
+		return uuid.Nil, uuid.Nil, uuid.Nil, "", ErrInvalidKeyFormat
+	}
+
+	var anchorID, otherID, edgeID uuid.UUID
+	copy(anchorID[:], key[1:17])
+	offset := 17 + consumed
+	copy(otherID[:], key[offset:offset+16])
+	copy(edgeID[:], key[offset+16:])
+	return anchorID, otherID, edgeID, label, nil
+}
+
 // EncodeEdgeIDKey returns the reverse-index key for an edge ID:
 // [PrefixEdgeByID] + [EdgeID].
 func EncodeEdgeIDKey(edgeID uuid.UUID) []byte {
@@ -293,6 +335,15 @@ func DecodeLabel(b []byte) (string, int) {
 		return "", 0
 	}
 	return string(b[2 : 2+l]), 2 + int(l)
+}
+
+// DecodeNodeValue decodes and validates a complete node value.
+func DecodeNodeValue(value []byte) (string, error) {
+	label, consumed := DecodeLabel(value)
+	if consumed == 0 || consumed != len(value) {
+		return "", ErrInvalidValueFormat
+	}
+	return label, nil
 }
 
 // numericToBytes converts generic numeric types to big-endian bytes for index sorting.

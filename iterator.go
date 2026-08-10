@@ -1,6 +1,7 @@
 package pathway
 
 import (
+	"bytes"
 	"errors"
 
 	"github.com/google/uuid"
@@ -167,32 +168,27 @@ func (it *edgeIterator) Edge() (uuid.UUID, uuid.UUID, string, error) {
 	if !it.current {
 		return uuid.Nil, uuid.Nil, "", iteratorStateError(it.Error())
 	}
-	// Key format: [Prefix] + [SourceID] + [LabelLen] + [Label] +
-	// [TargetID] + [EdgeID]. Incoming keys use target/source in place of
-	// source/target.
-	key := it.iter.Key()
-	if len(key) < 51 {
-		return uuid.Nil, uuid.Nil, "", encoding.ErrInvalidKeyFormat
+	_, otherID, keyEdgeID, label, err := encoding.DecodeEdgeKey(it.iter.Key())
+	if err != nil {
+		return uuid.Nil, uuid.Nil, "", it.fail(corruptRecord("edge adjacency key", err))
 	}
-
-	val := it.iter.Value()
-	if len(val) < 16 {
-		return uuid.Nil, uuid.Nil, "", encoding.ErrInvalidValueFormat
+	edgeID, err := encoding.DecodeEdgeValue(it.iter.Value())
+	if err != nil {
+		return uuid.Nil, uuid.Nil, "", it.fail(corruptRecord("edge adjacency value", err))
 	}
-	var edgeID uuid.UUID
-	copy(edgeID[:], val[:16])
-
-	offset := 17
-	label, n := encoding.DecodeLabel(key[offset:])
-	if n == 0 {
-		return uuid.Nil, uuid.Nil, "", encoding.ErrInvalidKeyFormat
+	if edgeID != keyEdgeID {
+		return uuid.Nil, uuid.Nil, "", it.fail(corruptRecord(
+			"edge adjacency value",
+			encoding.ErrInvalidValueFormat,
+		))
 	}
-	offset += n
-
-	var otherID uuid.UUID
-	copy(otherID[:], key[offset:offset+16])
-
 	return edgeID, otherID, label, nil
+}
+
+func (it *edgeIterator) fail(err error) error {
+	it.current = false
+	it.err = err
+	return err
 }
 
 func (it *edgeIterator) Close() error {
@@ -312,7 +308,10 @@ func (it *nodeIterator) Node() (uuid.UUID, string, error) {
 	}
 
 	val := it.iter.Value()
-	label, _ := encoding.DecodeLabel(val)
+	label, err := encoding.DecodeNodeValue(val)
+	if err != nil {
+		return uuid.Nil, "", it.fail(corruptRecord("node value", err))
+	}
 
 	return id, label, nil
 }
@@ -321,13 +320,17 @@ func (it *nodeIterator) nodeID() (uuid.UUID, error) {
 	if !it.current {
 		return uuid.Nil, iteratorStateError(it.Error())
 	}
-	key := it.iter.Key()
-	if len(key) < 17 {
-		return uuid.Nil, encoding.ErrInvalidKeyFormat
+	id, err := encoding.DecodeNodeKey(it.iter.Key())
+	if err != nil {
+		return uuid.Nil, it.fail(corruptRecord("node key", err))
 	}
-	var id uuid.UUID
-	copy(id[:], key[1:])
 	return id, nil
+}
+
+func (it *nodeIterator) fail(err error) error {
+	it.current = false
+	it.err = err
+	return err
 }
 
 func (it *nodeIterator) Close() error {
@@ -352,6 +355,8 @@ func (it *nodeIterator) path() Path {
 // nodeIndexIterator implements NodeIterator using the index keys.
 type nodeIndexIterator struct {
 	iter    rawIterator
+	prefix  []byte
+	label   string
 	valid   bool
 	current bool
 	err     error
@@ -387,29 +392,37 @@ func (it *nodeIndexIterator) Node() (uuid.UUID, string, error) {
 		return uuid.Nil, "", err
 	}
 
-	// Reconstruct Label from prefix
-	// format: [Prefix:1] [LabelLen:2] [Label]
-	key := it.iter.Key()
-	offset := 1
-	label, n := encoding.DecodeLabel(key[offset:])
-	if n == 0 {
-		return uuid.Nil, "", encoding.ErrInvalidKeyFormat
-	}
-
-	return id, label, nil
+	return id, it.label, nil
 }
 
 func (it *nodeIndexIterator) nodeID() (uuid.UUID, error) {
 	if !it.current {
 		return uuid.Nil, iteratorStateError(it.Error())
 	}
-	key := it.iter.Key()
-	if len(key) < 17 {
-		return uuid.Nil, encoding.ErrInvalidKeyFormat
+	if err := it.validateCurrent(); err != nil {
+		return uuid.Nil, it.fail(err)
 	}
+	key := it.iter.Key()
 	var id uuid.UUID
 	copy(id[:], key[len(key)-16:])
 	return id, nil
+}
+
+func (it *nodeIndexIterator) validateCurrent() error {
+	key := it.iter.Key()
+	if len(key) != len(it.prefix)+len(uuid.UUID{}) || !bytes.Equal(key[:len(it.prefix)], it.prefix) {
+		return corruptRecord("node index key", encoding.ErrInvalidKeyFormat)
+	}
+	if len(it.iter.Value()) != 0 {
+		return corruptRecord("node index value", encoding.ErrInvalidValueFormat)
+	}
+	return nil
+}
+
+func (it *nodeIndexIterator) fail(err error) error {
+	it.current = false
+	it.err = err
+	return err
 }
 
 func (it *nodeIndexIterator) Close() error {
@@ -788,7 +801,12 @@ func newPathIterator(prev Iterator) *pathIterator {
 
 func (it *pathIterator) Next() bool {
 	if it.prev.Next() {
-		it.curPath = append(Path(nil), currentPath(it.prev)...)
+		path := currentPath(it.prev)
+		if it.prev.Error() != nil {
+			it.curPath = nil
+			return false
+		}
+		it.curPath = append(Path(nil), path...)
 		return true
 	}
 	return false

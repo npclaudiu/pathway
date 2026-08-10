@@ -483,7 +483,7 @@ func (tx *Tx) DeleteEdge(edgeID uuid.UUID) error {
 
 	srcID, dstID, label, err := encoding.DecodeEdgeRecord(record)
 	if err != nil {
-		return err
+		return corruptRecord("edge reverse-index value", err)
 	}
 	outKey, err := encoding.EncodeEdgeOutKey(srcID, dstID, edgeID, label)
 	if err != nil {
@@ -548,14 +548,16 @@ func (tx *Tx) nodeExists(id uuid.UUID) (bool, error) {
 func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error) {
 	key := encoding.EncodeNodeKey(id)
 	val, err := tx.Get(key) // Tx.Get handles batch vs snapshot reading
-	if err == pebble.ErrNotFound {
+	if errors.Is(err, pebble.ErrNotFound) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
 	}
-	// Decode label
-	label, _ := encoding.DecodeLabel(val)
+	label, err := encoding.DecodeNodeValue(val)
+	if err != nil {
+		return "", false, corruptRecord("node value", err)
+	}
 	return label, true, nil
 }
 
@@ -565,7 +567,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error) {
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 	key := encoding.EncodePropertyKey(id)
 	val, err := tx.Get(key)
-	if err == pebble.ErrNotFound {
+	if errors.Is(err, pebble.ErrNotFound) {
 		return nil, nil // No props
 	}
 	if err != nil {
@@ -573,7 +575,7 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error) {
 	}
 	props, err := properties.UnmarshalProperties(val)
 	if err != nil {
-		return nil, err
+		return nil, corruptRecord("property value", err)
 	}
 	if err := tx.contextErr(); err != nil {
 		return nil, err
@@ -671,7 +673,13 @@ func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterat
 	}
 
 	iter.SeekGE(prefix)
-	return &nodeIndexIterator{iter: iter, valid: iter.Valid(), first: true}
+	return &nodeIndexIterator{
+		iter:   iter,
+		prefix: prefix,
+		label:  label,
+		valid:  iter.Valid(),
+		first:  true,
+	}
 }
 
 // ScanNodes scans all nodes in the database.

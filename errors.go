@@ -1,6 +1,9 @@
 package pathway
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Core library errors
 var (
@@ -20,4 +23,9 @@ var (
 	ErrDanglingEdge         = errors.New("cannot create edge: source or target node does not exist")
 	ErrUnsupportedSchema    = errors.New("unsupported pathway storage schema")
 	ErrInvalidDurability    = errors.New("invalid durability mode")
+	ErrCorruptData          = errors.New("corrupt stored data")
 )
+
+func corruptRecord(recordType string, cause error) error {
+	return fmt.Errorf("%w: malformed %s record: %w", ErrCorruptData, recordType, cause)
+}

@@ -35,6 +35,11 @@ reconciled.
 | `0x08` | External-ID forward lookup | See below | `node-ID` |
 | `0x09` | External IDs by node | `node-ID \|` external-ID components | Empty |
 
+Typed readers require exact key and value lengths, including the duplicated
+edge ID in adjacency keys and values. A mismatch, truncated record, trailing
+bytes, or invalid property payload returns `ErrCorruptData`. Error messages name
+the record type but do not include stored key or value bytes.
+
 The edge ID is part of both adjacency keys, giving Pathway multigraph
 semantics: edges with identical endpoints and labels remain distinct. The
 reverse record lets `DeleteEdge` find and remove both adjacency records and the

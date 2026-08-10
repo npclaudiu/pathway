@@ -145,6 +145,7 @@ var (
     ErrDanglingEdge         = errors.New("cannot create edge: source or target node does not exist")
     ErrUnsupportedSchema    = errors.New("unsupported pathway storage schema")
     ErrInvalidDurability    = errors.New("invalid durability mode")
+    ErrCorruptData          = errors.New("corrupt stored data")
 )
 ```
 
@@ -362,7 +363,7 @@ type Edge struct {
 ```
 
 <a name="EdgeIterator"></a>
-## type [EdgeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L32-L38>)
+## type [EdgeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L33-L39>)
 
 EdgeIterator iterates over typed edges. Edge is valid only after Next returns true and before Next is called again or the iterator is closed. Its UUIDs and string are caller\-owned values and remain valid after advancement or Close.
 
@@ -447,7 +448,7 @@ type IndexDefinition struct {
 ```
 
 <a name="Iterator"></a>
-## type [Iterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L19-L27>)
+## type [Iterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L20-L28>)
 
 Iterator is the common lifecycle contract for graph and traversal results.
 
@@ -492,7 +493,7 @@ type Node struct {
 ```
 
 <a name="NodeIterator"></a>
-## type [NodeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L43-L47>)
+## type [NodeIterator](<https://github.com/npclaudiu/pathway/blob/main/iterator.go#L44-L48>)
 
 NodeIterator iterates over typed nodes. Node is valid only after Next returns true and before Next is called again or the iterator is closed. Its UUID and string are caller\-owned values and remain valid after advancement or Close.
 
@@ -1173,7 +1174,7 @@ func (tx *Tx) DeleteNode(id uuid.UUID) error
 DeleteNode deletes a node and all its incident edges \(both outgoing and incoming\), including each edge's reverse\-index entry and properties. Its cost is linear in the node's degree.
 
 <a name="Tx.FindNodes"></a>
-### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L658>)
+### func \(\*Tx\) [FindNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L660>)
 
 ```go
 func (tx *Tx) FindNodes(label, propKey string, propValue interface{}) NodeIterator
@@ -1200,7 +1201,7 @@ func (tx *Tx) GetNode(id uuid.UUID) (string, bool, error)
 GetNode retrieves a node's label by its ID. Returns the label, a boolean indicating existence, and any error.
 
 <a name="Tx.GetProperties"></a>
-### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L565>)
+### func \(\*Tx\) [GetProperties](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L567>)
 
 ```go
 func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
@@ -1209,7 +1210,7 @@ func (tx *Tx) GetProperties(id uuid.UUID) (map[string]interface{}, error)
 GetProperties retrieves the properties map for a given node or edge ID. Signed integers are returned as int64, unsigned integers as uint64, and floats as float64. Returns nil if no properties exist.
 
 <a name="Tx.InEdges"></a>
-### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L605>)
+### func \(\*Tx\) [InEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L607>)
 
 ```go
 func (tx *Tx) InEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -1227,7 +1228,7 @@ func (tx *Tx) Load(id uuid.UUID, dest interface{}) error
 Load populates the destination struct with properties from the node/edge with the given ID. dest must be a pointer to a struct.
 
 <a name="Tx.OutEdges"></a>
-### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L593>)
+### func \(\*Tx\) [OutEdges](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L595>)
 
 ```go
 func (tx *Tx) OutEdges(id uuid.UUID, labels ...string) EdgeIterator
@@ -1295,7 +1296,7 @@ func (tx *Tx) ResolveExternalID(externalID ExternalID) (uuid.UUID, bool, error)
 ResolveExternalID returns the internal UUID bound to externalID. The boolean is false when no binding exists. Dangling or inconsistent forward/reverse records return ErrExternalIDCorrupt.
 
 <a name="Tx.ScanNodes"></a>
-### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L679>)
+### func \(\*Tx\) [ScanNodes](<https://github.com/npclaudiu/pathway/blob/main/tx.go#L687>)
 
 ```go
 func (tx *Tx) ScanNodes() NodeIterator

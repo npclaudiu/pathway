@@ -25,6 +25,24 @@ func TestEncodeNodeKey(t *testing.T) {
 	}
 }
 
+func TestDecodeNodeKeyRequiresCompleteRecord(t *testing.T) {
+	id := uuid.New()
+	decoded, err := DecodeNodeKey(EncodeNodeKey(id))
+	if err != nil || decoded != id {
+		t.Fatalf("DecodeNodeKey() = %s, %v; want %s, nil", decoded, err, id)
+	}
+	for _, key := range [][]byte{
+		nil,
+		append([]byte{PrefixNode}, id[:15]...),
+		append(EncodeNodeKey(id), 0),
+		append([]byte{PrefixProperties}, id[:]...),
+	} {
+		if _, err := DecodeNodeKey(key); err != ErrInvalidKeyFormat {
+			t.Fatalf("DecodeNodeKey(%x) error = %v", key, err)
+		}
+	}
+}
+
 func TestExternalIDEncodingRoundTripAndFraming(t *testing.T) {
 	nodeID := uuid.New()
 	namespace := "git-object/sha256"
@@ -218,6 +236,49 @@ func TestEncodeEdgeValue(t *testing.T) {
 	}
 }
 
+func TestDecodeEdgeKeyAndValueRequireCompleteRecords(t *testing.T) {
+	anchor, other, edgeID := uuid.New(), uuid.New(), uuid.New()
+	key, err := EncodeEdgeOutKey(anchor, other, edgeID, "LINK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotAnchor, gotOther, gotEdgeID, gotLabel, err := DecodeEdgeKey(key)
+	if err != nil || gotAnchor != anchor || gotOther != other ||
+		gotEdgeID != edgeID || gotLabel != "LINK" {
+		t.Fatalf(
+			"DecodeEdgeKey() = %s, %s, %s, %q, %v",
+			gotAnchor,
+			gotOther,
+			gotEdgeID,
+			gotLabel,
+			err,
+		)
+	}
+
+	malformedLength := append([]byte(nil), key...)
+	binary.BigEndian.PutUint16(malformedLength[17:], uint16(len("LINK")+1))
+	for _, invalid := range [][]byte{
+		key[:len(key)-1],
+		append(append([]byte(nil), key...), 0),
+		malformedLength,
+		append([]byte{PrefixNode}, key[1:]...),
+	} {
+		if _, _, _, _, err := DecodeEdgeKey(invalid); err != ErrInvalidKeyFormat {
+			t.Fatalf("DecodeEdgeKey(%x) error = %v", invalid, err)
+		}
+	}
+
+	decodedValue, err := DecodeEdgeValue(EncodeEdgeValue(edgeID))
+	if err != nil || decodedValue != edgeID {
+		t.Fatalf("DecodeEdgeValue() = %s, %v; want %s, nil", decodedValue, err, edgeID)
+	}
+	for _, invalid := range [][]byte{make([]byte, 15), make([]byte, 17)} {
+		if _, err := DecodeEdgeValue(invalid); err != ErrInvalidValueFormat {
+			t.Fatalf("DecodeEdgeValue(%x) error = %v", invalid, err)
+		}
+	}
+}
+
 func TestEdgeIDReverseIndexEncoding(t *testing.T) {
 	src, dst, edgeID := uuid.New(), uuid.New(), uuid.New()
 	label := "KNOWS"
@@ -296,6 +357,23 @@ func TestDecodeLabel(t *testing.T) {
 	_, n = DecodeLabel(b2)
 	if n != 0 {
 		t.Errorf("expected error/0, got %d", n)
+	}
+}
+
+func TestDecodeNodeValueRequiresCompleteRecord(t *testing.T) {
+	value := []byte{0, 4, 'N', 'o', 'd', 'e'}
+	if label, err := DecodeNodeValue(value); err != nil || label != "Node" {
+		t.Fatalf("DecodeNodeValue() = %q, %v; want Node, nil", label, err)
+	}
+	for _, invalid := range [][]byte{
+		nil,
+		{0},
+		{0, 2, 'A'},
+		append(append([]byte(nil), value...), 0),
+	} {
+		if _, err := DecodeNodeValue(invalid); err != ErrInvalidValueFormat {
+			t.Fatalf("DecodeNodeValue(%x) error = %v", invalid, err)
+		}
 	}
 }
 

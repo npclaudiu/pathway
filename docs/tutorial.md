@@ -53,6 +53,11 @@ opening. The same options value can be reused for concurrent databases, and
 the `:memory:` filesystem override never changes the caller's
 `PebbleOptions`.
 
+Typed reads validate complete node, edge, index, and property records. If a
+store is damaged or modified through raw writes, operations return
+`pathway.ErrCorruptData` with the affected record type instead of returning
+partial data.
+
 `DurabilitySync` waits for each successful `Update` to be synchronized to
 stable storage. For replayable bulk imports, `DurabilityNoSync` can reduce
 commit latency, but a process or machine crash may lose recent updates that

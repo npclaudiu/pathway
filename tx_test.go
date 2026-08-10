@@ -547,6 +547,9 @@ func TestTx_DeleteNode_CorruptAdjacencyAborts(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = db.Update(ctx, func(tx *Tx) error { return tx.DeleteNode(id) })
+	if !errors.Is(err, ErrCorruptData) {
+		t.Fatalf("expected ErrCorruptData, got %v", err)
+	}
 	if !errors.Is(err, encoding.ErrInvalidKeyFormat) {
 		t.Fatalf("expected ErrInvalidKeyFormat, got %v", err)
 	}
@@ -582,6 +585,9 @@ func TestTx_DeleteEdge_CorruptReverseRecordAborts(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = db.Update(ctx, func(tx *Tx) error { return tx.DeleteEdge(edgeID) })
+	if !errors.Is(err, ErrCorruptData) {
+		t.Fatalf("expected ErrCorruptData, got %v", err)
+	}
 	if !errors.Is(err, encoding.ErrInvalidValueFormat) {
 		t.Fatalf("expected ErrInvalidValueFormat, got %v", err)
 	}
