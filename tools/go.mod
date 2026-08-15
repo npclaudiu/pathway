@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/golangci/golangci-lint/v2 v2.12.2
 	github.com/princjef/gomarkdoc v1.1.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
